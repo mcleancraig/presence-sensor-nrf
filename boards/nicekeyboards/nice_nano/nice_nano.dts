@@ -1,0 +1,136 @@
+/*
+ * Copyright (c) 2026 Craig McLean
+ * Board Devicetree for nice!nano v2 / SuperMini nRF52840
+ */
+
+/dts-v1/;
+
+#include <nordic/nrf52840_qiaa.dtsi>
+#include "nice_nano-pinctrl.dtsi"
+
+/ {
+    model = "nice!nano v2 / SuperMini nRF52840";
+    compatible = "nicekeyboards,nice_nano", "nordic,nrf52840-qiaa", "nordic,nrf52840";
+
+    chosen {
+        zephyr,code-partition = &code_partition;
+        zephyr,sram = &sram0;
+        zephyr,flash = &flash0;
+        zephyr,console = &uart0;
+        zephyr,shell-uart = &uart0;
+        zephyr,uart-mcumgr = &uart0;
+        zephyr,ieee802154 = &ieee802154;
+    };
+
+    leds {
+        compatible = "gpio-leds";
+        blue_led: led_0 {
+            gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>;
+            label = "Blue LED";
+        };
+    };
+
+    buttons {
+        compatible = "gpio-keys";
+    };
+
+    aliases {
+        led0 = &blue_led;
+    };
+
+    zephyr,user {
+        /* External VCC Power Cutoff: Pin 13 (P0.13) */
+        power-cutoff-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+    };
+};
+
+/*
+ * REG1 is left in its default LDO mode. DC/DC mode needs an inductor on DCC,
+ * which is not confirmed on SuperMini clones; enabling it without one stops
+ * the SoC from running. With the radio mostly asleep the saving is ~1-2 uA.
+ */
+
+/* Battery channel is configured at runtime (see battery_monitor.cpp / Kconfig) */
+&adc {
+    status = "okay";
+};
+
+&gpiote {
+    status = "okay";
+};
+
+&gpio0 {
+    status = "okay";
+};
+
+&gpio1 {
+    status = "okay";
+};
+
+&i2c0 {
+    compatible = "nordic,nrf-twim";
+    status = "okay";
+    pinctrl-0 = <&i2c0_default>;
+    pinctrl-1 = <&i2c0_sleep>;
+    pinctrl-names = "default", "sleep";
+    clock-frequency = <I2C_BITRATE_STANDARD>;
+    zephyr,pm-device-runtime-auto;
+};
+
+/*
+ * Disabled for battery life: an active UARTE receiver keeps the HF clock
+ * running (hundreds of uA). debug.overlay re-enables it for logging.
+ */
+&uart0 {
+    compatible = "nordic,nrf-uarte";
+    status = "disabled";
+    current-speed = <115200>;
+    pinctrl-0 = <&uart0_default>;
+    pinctrl-1 = <&uart0_sleep>;
+    pinctrl-names = "default", "sleep";
+};
+
+/*
+ * Disabled for battery life: debug.overlay re-enables it for USB logging.
+ */
+zephyr_udc0: &usbd {
+    status = "disabled";
+};
+
+&ieee802154 {
+    status = "okay";
+};
+
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        /*
+         * This board's Adafruit UF2 bootloader (0.6.1) reports "SoftDevice: not
+         * found" in INFO_UF2.TXT; without a SoftDevice it starts the app right
+         * after the MBR at 0x1000. On a board whose INFO_UF2.TXT lists
+         * "SoftDevice: S140 6.1.1" the app must start at 0x26000 instead.
+         */
+        mbr_partition: partition@0 {
+            label = "mbr";
+            reg = <0x00000000 0x00001000>;
+        };
+
+        code_partition: partition@1000 {
+            label = "code_partition";
+            reg = <0x00001000 0x000eb000>;
+        };
+
+        storage_partition: partition@ec000 {
+            label = "storage";
+            reg = <0x000ec000 0x00008000>;
+        };
+
+        boot_partition: partition@f4000 {
+            label = "adafruit_boot";
+            reg = <0x000f4000 0x0000c000>;
+        };
+    };
+};

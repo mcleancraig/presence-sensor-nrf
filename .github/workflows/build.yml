@@ -1,0 +1,83 @@
+name: Build firmware
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  NCS_VERSION: v2.8.0
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: release
+            artifact: firmware
+            extra: ""
+          - variant: debug
+            artifact: firmware-debug
+            extra: -DEXTRA_CONF_FILE=debug.conf -DEXTRA_DTC_OVERLAY_FILE=debug.overlay
+    container:
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v2.8.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: git/presence-sensor-nrf
+
+      - name: Restore nRF Connect SDK cache
+        id: ncs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ncs
+          key: ncs-${{ env.NCS_VERSION }}-v1
+
+      - name: Fetch nRF Connect SDK ${{ env.NCS_VERSION }}
+        if: steps.ncs-cache.outputs.cache-hit != 'true'
+        run: |
+          west init -m https://github.com/nrfconnect/sdk-nrf --mr "$NCS_VERSION" ncs
+          cd ncs
+          west update --narrow -o=--depth=1
+
+      # Saved straight away so a failing build does not discard the download
+      - name: Save nRF Connect SDK cache
+        if: steps.ncs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ncs
+          key: ncs-${{ env.NCS_VERSION }}-v1
+
+      - name: Run protocol host unit tests
+        if: matrix.variant == 'release'
+        working-directory: git/presence-sensor-nrf
+        run: |
+          ./scripts/run-tests.sh
+
+      - name: Build (${{ matrix.variant }})
+        working-directory: ncs
+        run: |
+          APP="$GITHUB_WORKSPACE/git/presence-sensor-nrf"
+          # -k0: report every compile error, not just the first
+          west build --no-sysbuild -b nice_nano/nrf52840 -p always -o=-k0 \
+            -s "$APP" -d "$GITHUB_WORKSPACE/build" -- \
+            -DBOARD_ROOT="$APP" ${{ matrix.extra }}
+          ls -l "$GITHUB_WORKSPACE/build/zephyr"/zephyr.{uf2,hex}
+          grep -E '^CONFIG_(SERIAL|CONSOLE|UART_CONSOLE|LOG|PM_DEVICE|PM_DEVICE_RUNTIME|BT|BUILD_OUTPUT_UF2|ROM_START_OFFSET)=' "$GITHUB_WORKSPACE/build/zephyr/.config" || true
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            build/zephyr/zephyr.uf2
+            build/zephyr/zephyr.hex
+            build/zephyr/.config
+          include-hidden-files: true
+          if-no-files-found: error

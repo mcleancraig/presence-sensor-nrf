@@ -1,0 +1,37 @@
+# Build output
+build/
+build_debug/
+twister-out/
+*.hex
+*.bin
+*.elf
+*.uf2
+!update-nice_nano_bootloader-0.6.1_nosd.uf2
+
+# Host test binaries
+tests/test_protocols
+tests/*.o
+tests/*.dSYM/
+
+# Zephyr / West workspace files (if nested)
+.west/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# System / IDE
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+compile_commands.json
+.cache/
+
+# Enclosure tooling
+enclosure/.venv/

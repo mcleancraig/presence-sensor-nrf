@@ -1,0 +1,49 @@
+/*
+ * Copyright (c) 2026 Craig McLean
+ * Devicetree overlay for BTHome v2 BLE mmWave Presence Sensor (HLK-LD2410S)
+ *
+ * Pinout on SuperMini nRF52840 (nice!nano v2 clone):
+ *   - P0.13 (VCC switch): Continuous 3.3V supply to HLK-LD2410S (cut off at <= 3.0V)
+ *   - P0.17 (017 / D2):   HLK-LD2410S OT2 digital presence output (GPIO_INT_EDGE_BOTH)
+ *   - P0.08 (008 / D0):   uart0 RX <- HLK-LD2410S TX (115200 8N1)
+ *   - P0.06 (006 / D1):   uart0 TX -> HLK-LD2410S RX (115200 8N1)
+ */
+
+/ {
+    chosen {
+        /delete-property/ zephyr,console;
+        /delete-property/ zephyr,shell-uart;
+        /delete-property/ zephyr,uart-mcumgr;
+        /delete-property/ zephyr,ieee802154;
+    };
+
+    zephyr,user {
+        /* External VCC Power Cutoff: Pin 13 (P0.13), held HIGH in System ON */
+        power-cutoff-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+        /* HLK-LD2410S OT2 Presence Pin: P0.17 (D2), active HIGH with pull-down */
+        presence-ot2-gpios = <&gpio0 17 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
+    };
+};
+
+/*
+ * HLK-LD2410S UART interface (115200 8N1 on P0.06 TX / P0.08 RX).
+ * Explicitly suspended via pm_device_action_run(PM_DEVICE_ACTION_SUSPEND)
+ * during System ON sleep so UARTE0 and the 64 MHz HFCLK draw 0 uA when idle.
+ */
+&uart0 {
+    compatible = "nordic,nrf-uarte";
+    status = "okay";
+    current-speed = <115200>;
+    pinctrl-0 = <&uart0_default>;
+    pinctrl-1 = <&uart0_sleep>;
+    pinctrl-names = "default", "sleep";
+};
+
+/* Disable unused peripherals for minimal sleep leakage */
+&i2c0 {
+    status = "disabled";
+};
+
+&ieee802154 {
+    status = "disabled";
+};

@@ -1,0 +1,6 @@
+if BOARD_NICE_NANO
+
+config BOARD
+	default "nice_nano"
+
+endif # BOARD_NICE_NANO

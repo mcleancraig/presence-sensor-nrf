@@ -1,0 +1,13 @@
+/* Debug overlay: route the console and logs to a USB CDC ACM serial port. Use with debug.conf. */
+/ {
+    chosen {
+        zephyr,console = &cdc_acm_uart0;
+    };
+};
+
+&zephyr_udc0 {
+    status = "okay";
+    cdc_acm_uart0: cdc_acm_uart0 {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};

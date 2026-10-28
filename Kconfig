@@ -1,0 +1,99 @@
+#
+# Copyright (c) 2026 Craig McLean
+# BTHome v2 BLE mmWave Presence Sensor (HLK-LD2410S) Kconfig
+#
+
+mainmenu "BTHome v2 BLE mmWave Presence Sensor"
+
+config APP_HEARTBEAT_INTERVAL_SEC
+	int "Periodic idle BTHome BLE heartbeat interval (seconds)"
+	default 300
+	help
+	  Interval between periodic BTHome v2 heartbeat advertisements when no
+	  occupancy edge transitions occur. Occupancy state changes are always
+	  transmitted immediately via a high-priority BLE burst.
+
+config APP_OCCUPIED_DISTANCE_POLL_SEC
+	int "Occupied target distance refresh interval (seconds)"
+	default 15
+	help
+	  While OT2 remains asserted (room occupied), wake uart0 briefly at this
+	  interval to read the latest target distance from the HLK-LD2410S and
+	  refresh the BTHome v2 advertisement.
+
+config APP_BATTERY_SAMPLE_INTERVAL_SEC
+	int "Battery voltage sampling interval (seconds)"
+	default 3600
+	help
+	  Interval between SAADC VDDH/5 battery voltage measurements.
+
+config APP_RADAR_MAX_GATE
+	int "HLK-LD2410S farthest detection distance gate (0.7 m per gate)"
+	range 1 16
+	default 3
+	help
+	  Sets the HLK-LD2410S farthest detection gate (0.70 m per gate).
+	  Gate 3 = 2.10 m, sized for a ~3 m^3 bathroom (~1.5 x 1.5 x 2.2 m) so
+	  radar energy does not penetrate drywall or doors into adjacent hallways.
+
+config APP_RADAR_MIN_GATE
+	int "HLK-LD2410S nearest detection distance gate"
+	range 0 15
+	default 0
+	help
+	  Sets the HLK-LD2410S nearest detection gate (0 = 0.0 m).
+
+config APP_RADAR_HOLD_S
+	int "HLK-LD2410S unoccupied delay / hold time (seconds)"
+	range 10 120
+	default 30
+	help
+	  Time in seconds the HLK-LD2410S keeps OT2 asserted after the last
+	  detected micro-motion or breathing signature clears.
+
+choice APP_BATTERY_SENSE
+	prompt "Battery voltage sense method"
+	default APP_BATTERY_SENSE_VDDH
+
+config APP_BATTERY_SENSE_VDDH
+	bool "Internal VDDH/5"
+	help
+	  Use when the 18650 cell is wired to the B+/BAT pad, which feeds the
+	  nRF52840 VDDH pin directly (nice!nano v2 and SuperMini). No external
+	  parts. Note that on the SuperMini VDDH rises while USB is charging.
+
+config APP_BATTERY_SENSE_DIVIDER
+	bool "External resistor divider on an analog input"
+	help
+	  The SuperMini's on-board divider is wired to P0.24, which is not an
+	  analog input, so this needs an external divider.
+
+endchoice
+
+if APP_BATTERY_SENSE_DIVIDER
+
+config APP_BATTERY_DIVIDER_AIN
+	int "SAADC analog input (AINx) the divider midpoint is wired to"
+	range 0 7
+	default 5
+	help
+	  AIN0=P0.02 AIN1=P0.03 AIN2=P0.04 AIN3=P0.05
+	  AIN4=P0.28 AIN5=P0.29 AIN6=P0.30 AIN7=P0.31
+
+config APP_BATTERY_DIVIDER_R_TOP_OHMS
+	int "Divider resistor from battery to midpoint (ohms)"
+	default 806000
+
+config APP_BATTERY_DIVIDER_R_BOTTOM_OHMS
+	int "Divider resistor from midpoint to GND (ohms)"
+	default 2000000
+
+endif # APP_BATTERY_SENSE_DIVIDER
+
+config APP_DEBUG_KEEP_ALIVE
+	bool "Keep running after fatal errors, asserts and abort() (debug only)"
+	help
+	  Aborts only the failing thread so its error report can still be
+	  logged. Never enable in a deployed build.
+
+source "Kconfig.zephyr"
