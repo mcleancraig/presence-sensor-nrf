@@ -157,7 +157,9 @@ def box(x: float, y: float, z: float, cx: float, cy: float, z0: float) -> cq.Wor
     return cq.Workplane("XY").box(x, y, z, centered=(True, True, False)).translate((cx, cy, z0))
 
 
-def _add_board_cradle(base: cq.Workplane) -> cq.Workplane:
+def _add_board_cradle(
+    base: cq.Workplane, board_x: float = BOARD_X, open_pos_x: bool = False
+) -> cq.Workplane:
     """Support SuperMini nRF52840 at its 4 corners + inset rails, clearing +/-Y pin rows and -X B+/B-."""
     stop_h = BOARD_RAIL_H + BOARD_T + STOP_ABOVE
     end_pad_l = (BOARD_L - BOARD_PIN_ROW_L) / 2 - 0.3     # 2.2 mm at -X and +X ends outside pin rows
@@ -165,18 +167,19 @@ def _add_board_cradle(base: cq.Workplane) -> cq.Workplane:
     for sy in (-1, 1):
         # Inset longitudinal rail inside the +/-Y through-hole pin rows (open at -X/+X for wires)
         inset_y = Y_BRD + sy * (BOARD_W / 2 - BOARD_PIN_SPAN_Y - 1.8)
-        base = base.union(box(BOARD_L - 12.0, 1.4, BOARD_RAIL_H, BOARD_X, inset_y, FLOOR))
+        base = base.union(box(BOARD_L - 12.0, 1.4, BOARD_RAIL_H, board_x, inset_y, FLOOR))
         for sx in (-1, 1):
             # Corner under-board pad outside the 12-pin rows and outside -X B+/B- pads
-            px = BOARD_X + sx * (BOARD_L / 2 - end_pad_l / 2)
+            px = board_x + sx * (BOARD_L / 2 - end_pad_l / 2)
             py = Y_BRD + sy * (BOARD_W / 2 - end_pad_w / 2)
             base = base.union(box(end_pad_l, end_pad_w, BOARD_RAIL_H, px, py, FLOOR))
-            # X-end stop (spaced out by BOARD_CLEAR)
-            sxp = BOARD_X + sx * (BOARD_L / 2 + BOARD_CLEAR + STOP_T / 2)
-            syp = Y_BRD + sy * (BOARD_W / 2 + BOARD_CLEAR - STOP_W / 2)
-            base = base.union(box(STOP_T, STOP_W, stop_h, sxp, syp, FLOOR))
+            if not (open_pos_x and sx == 1):
+                # X-end stop (spaced out by BOARD_CLEAR)
+                sxp = board_x + sx * (BOARD_L / 2 + BOARD_CLEAR + STOP_T / 2)
+                syp = Y_BRD + sy * (BOARD_W / 2 + BOARD_CLEAR - STOP_W / 2)
+                base = base.union(box(STOP_T, STOP_W, stop_h, sxp, syp, FLOOR))
             # Y-side stop (spaced out by BOARD_CLEAR)
-            sxp_y = BOARD_X + sx * (BOARD_L / 2 + BOARD_CLEAR - STOP_W / 2)
+            sxp_y = board_x + sx * (BOARD_L / 2 + BOARD_CLEAR - STOP_W / 2)
             syp_y = Y_BRD + sy * (BOARD_W / 2 + BOARD_CLEAR + STOP_T / 2)
             base = base.union(box(STOP_W, STOP_T, stop_h, sxp_y, syp_y, FLOOR))
     return base
@@ -341,7 +344,7 @@ def make_lid() -> cq.Workplane:
 # Dummy parts for the fit check (not printed)
 # --------------------------------------------------------------------------------------
 
-def make_dummies() -> dict[str, cq.Workplane]:
+def make_dummies(board_x: float = BOARD_X) -> dict[str, cq.Workplane]:
     cell = (cq.Workplane("YZ").workplane(offset=-CELL_LEN / 2).center(Y_BAT, AXIS_Z)
             .circle(CELL_D / 2).extrude(CELL_LEN))
     back = SLOT_X + (SLOT_T - PLATE_T) / 2  # plates pushed against the back of the slot
@@ -350,16 +353,16 @@ def make_dummies() -> dict[str, cq.Workplane]:
     # SuperMini nRF52840 PCB + top-side components/USB-C + bottom-side through-hole solder joints
     z_brd_bot = FLOOR + BOARD_RAIL_H
     z_brd_top = z_brd_bot + BOARD_T
-    board = box(BOARD_L, BOARD_W, BOARD_T, BOARD_X, Y_BRD, z_brd_bot)
-    board_parts = box(28.0, 16.0, 3.0, BOARD_X + 1.5, Y_BRD, z_brd_top)
+    board = box(BOARD_L, BOARD_W, BOARD_T, board_x, Y_BRD, z_brd_bot)
+    board_parts = box(28.0, 16.0, 3.0, board_x + 1.5, Y_BRD, z_brd_top)
     for sy in (-1, 1):
         pin_row_y = Y_BRD + sy * (BOARD_W / 2 - BOARD_PIN_SPAN_Y / 2)
         board_parts = board_parts.union(
-            box(BOARD_PIN_ROW_L, BOARD_PIN_SPAN_Y, BOARD_PIN_DEPTH, BOARD_X, pin_row_y, z_brd_bot - BOARD_PIN_DEPTH)
+            box(BOARD_PIN_ROW_L, BOARD_PIN_SPAN_Y, BOARD_PIN_DEPTH, board_x, pin_row_y, z_brd_bot - BOARD_PIN_DEPTH)
         )
     # SuperMini -X end B+/B- solder tails
     board_parts = board_parts.union(
-        box(2.2, 6.0, BOARD_PIN_DEPTH, BOARD_X - BOARD_L / 2 + 1.5, Y_BRD, z_brd_bot - BOARD_PIN_DEPTH)
+        box(2.2, 6.0, BOARD_PIN_DEPTH, board_x - BOARD_L / 2 + 1.5, Y_BRD, z_brd_bot - BOARD_PIN_DEPTH)
     )
 
     # HLK-LD2410S 20.0 x 20.0 x 1.2 mm PCB (R = 2.0 mm rounded corners)

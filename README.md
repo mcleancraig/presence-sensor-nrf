@@ -2,7 +2,7 @@
 
 Ultra-low-power 24 GHz mmWave Human Presence, Motion, Distance, and Battery Sensor for Home Assistant over **BTHome v2 Bluetooth Low Energy**, built on the SuperMini nRF52840 (`nice!nano v2` compatible) and the Hi-Link **HLK-LD2410S** battery-powered radar module.
 
-> **Enclosure:** 3D-printable compact enclosure (STEP for Fusion + STL) in [`enclosure/`](enclosure/README.md).
+> **Enclosure:** Three 3D-printable Bambu A1 enclosure models (STEP for Fusion + STL) in [`enclosure/`](enclosure/README.md) — see [Section 8](#8-3d-printable-enclosures-3-bambu-a1-models).
 >
 > **Bring-up notes:** see [`doc/bringup-notes.md`](doc/bringup-notes.md) for flash offset requirements (`0x1000` without SoftDevice), HLK-LD2410S continuous power vs. UART sleep architecture, BTHome v2 discovery, and debugging over USB CDC ACM.
 
@@ -180,3 +180,15 @@ scripts/fetch-firmware.sh --debug   # USB CDC ACM debug build
 | **Total Estimated System Average** | **`~75 – 170 µA`** |
 
 With a **2800 mAh Li-ion cell** (~`2200 mAh` usable above `3.0 V`), a `75 – 170 µA` average current yields **1.5 to 3.3 years** of continuous runtime per charge.
+
+---
+
+## 8. 3D-Printable Enclosures (3 Bambu A1 Models)
+
+[`enclosure/enclosure.py`](enclosure/enclosure.py) generates **three complete, support-free Bambu A1 enclosure models** tailored to the **`20.0 × 20.0 × 1.2 mm` HLK-LD2410S** (`2.54 mm` 5-pin `J2` header facing `+X`), **SuperMini nRF52840**, and **18650 Li-ion cell** (see [`enclosure/README.md`](enclosure/README.md) for assembly and print settings):
+
+| Model | Variant Name | Printable `.stl` Files (`enclosure/`) | CAD `.step` Files (`enclosure/`) | Closure & Mounting | Key Features & Best Use Case |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Model 1** | **Sealed Gasketed Wall-Mount** | `base.stl`, `lid.stl` | `base.step`, `lid.step`, `assembly.step` | 4× M3×8 screws + M3×5.7×4.6 heat-set inserts, 2 mm EPDM/TPU gasket groove, `±X` wall-mount tabs | Steam/splash-resistant bathroom wall mounting (`22 × 22 × 1.2 mm` blind RF radome window) |
+| **Model 2** | **Snap-Fit + 45° Room-Corner Bracket** | `corner_base.stl`, `corner_lid.stl`, `corner_bracket.stl` | `corner_base.step`, `corner_lid.step`, `corner_bracket.step`, `corner_assembly.step` | Tool-less snap-fit lid (`±Y` barbs) + slide-on 45° downward-tilt 90° room-corner / ceiling bracket | Optimal 3 m³ bathroom corner coverage with zero metal fasteners or heat-set inserts |
+| **Model 3** | **Freestanding Shelf / Vanity Pod** | `vanity_base.stl`, `vanity_lid.stl` | `vanity_base.step`, `vanity_lid.step`, `vanity_assembly.step` | Tool-less snap-fit lid (`±Y` barbs) + flat weighted `-Y` 18650 base foot | Stands upright on a bathroom shelf or vanity with a `+X` **USB-C pass-through port** for in-place 18650 recharging |

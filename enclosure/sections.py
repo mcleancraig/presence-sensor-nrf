@@ -1,7 +1,7 @@
 """
-Renders exact 2D cross-sections of the presence sensor enclosure with all dummy parts
+Renders exact 2D cross-sections of all 3 presence sensor enclosure models with all dummy parts
 (18650 cell, contact plates, SuperMini nRF52840 board + through-hole pins, HLK-LD2410S
-20x20 mm radar + J2 5-pin header shroud/pins/solder-tails) to out/sections/*.png.
+20x20 mm radar + J2 5-pin header, 45 deg corner bracket, and USB-C plug) to out/sections/*.png.
 
 Run:  python sections.py            (needs cadquery and matplotlib)
 """
@@ -19,10 +19,16 @@ from matplotlib.patches import Patch
 import numpy as np
 
 import enclosure as e
+import enclosure_variants as ev
 
 COLORS: dict[str, str] = {
     "base": "#9a9a9a",
     "lid": "#5b7fc7",
+    "corner_base": "#8e949e",
+    "corner_lid": "#4a78c2",
+    "corner_bracket": "#555b66",
+    "vanity_base": "#8e949e",
+    "vanity_lid": "#4a78c2",
     "cell": "#dd4433",
     "plate_neg": "#3355dd",
     "plate_pos": "#3355dd",
@@ -30,6 +36,7 @@ COLORS: dict[str, str] = {
     "board_parts": "#66c266",
     "radar": "#e67e22",
     "radar_parts": "#f39c12",
+    "usb_c_plug": "#8e44ad",
 }
 
 
@@ -85,18 +92,12 @@ def plot(out_dir: Path, shapes: dict[str, cq.Workplane], spec: SectionSpec) -> N
     plt.close(fig)
 
 
-def main() -> None:
-    out_dir = Path(__file__).parent / "out" / "sections"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    base, lid, dm = e.make_base(), e.make_lid(), e.make_dummies()
-    shapes: dict[str, cq.Workplane] = {"base": base, "lid": lid, **dm}
-
+def _model1_specs() -> list[SectionSpec]:
     z_board = e.FLOOR + e.BOARD_RAIL_H + e.BOARD_T / 2
     z_radar = e.FLOOR + e.RADAR_RAIL_H + e.RADAR_T / 2
     z_radome = e.H + e.RADOME_DEPTH / 2
     z_flange = e.H - 0.5
-
-    specs: list[SectionSpec] = [
+    return [
         SectionSpec("z_mid_cell", (0.0, 0.0, e.AXIS_Z), (0, 0, 1), (0, 1),
                     f"XY section at Z={e.AXIS_Z:.1f} mm (18650 cell mid-plane, contact plates, radar J2 header pins)"),
         SectionSpec("z_board", (0.0, 0.0, z_board), (0, 0, 1), (0, 1),
@@ -123,10 +124,42 @@ def main() -> None:
                     f"YZ section at X={e.SLOT_X:.1f} mm (+ dimple contact plate slot & side wall)"),
     ]
 
-    for spec in specs:
-        plot(out_dir, shapes, spec)
 
-    print(f"12 sections written to {out_dir}")
+def main() -> None:
+    out_dir = Path(__file__).parent / "out" / "sections"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Model 1 sections
+    base, lid, dm1 = e.make_base(), e.make_lid(), e.make_dummies()
+    shapes1: dict[str, cq.Workplane] = {"base": base, "lid": lid, **dm1}
+    for spec in _model1_specs():
+        plot(out_dir, shapes1, spec)
+
+    # Model 2 (45 deg Corner Snap-Fit + Bracket) sections
+    c_base, c_lid, c_br = ev.make_corner_base(), ev.make_corner_lid(), ev.make_corner_bracket()
+    shapes2: dict[str, cq.Workplane] = {"corner_base": c_base, "corner_lid": c_lid, "corner_bracket": c_br, **dm1}
+    plot(out_dir, shapes2, SectionSpec(
+        "corner_snap_y", (0.0, e.Y_ELEC, 0.0), (0, 1, 0), (0, 2),
+        f"Model 2 XZ section at Y={e.Y_ELEC:.1f} mm (Snap-Fit Corner Enclosure + 45 deg Bracket + Pry Slots)"
+    ))
+    plot(out_dir, shapes2, SectionSpec(
+        "corner_bracket_x", (-ev.SNAP_X_OFF, 0.0, 0.0), (1, 0, 0), (1, 2),
+        f"Model 2 YZ section at X={-ev.SNAP_X_OFF:.1f} mm (Snap-Fit Catches, Slide Rails & 90 deg / 45 deg Corner Bracket)"
+    ))
+
+    # Model 3 (Freestanding Vanity Pod with USB-C Pass-Through) sections
+    v_base, v_lid, dm3 = ev.make_vanity_base(), ev.make_vanity_lid(), ev.make_vanity_dummies()
+    shapes3: dict[str, cq.Workplane] = {"vanity_base": v_base, "vanity_lid": v_lid, **dm3}
+    plot(out_dir, shapes3, SectionSpec(
+        "vanity_usbc_y", (0.0, e.Y_ELEC, 0.0), (0, 1, 0), (0, 2),
+        f"Model 3 XZ section at Y={e.Y_ELEC:.1f} mm (Freestanding Vanity Pod + SuperMini USB-C Pass-Through & Overmold Boot)"
+    ))
+    plot(out_dir, shapes3, SectionSpec(
+        "vanity_standing_x", (ev.BOARD_X_VANITY, 0.0, 0.0), (1, 0, 0), (1, 2),
+        f"Model 3 YZ section at X={ev.BOARD_X_VANITY:.1f} mm (Vanity Pod -Y Standing Foot, 18650 Low-CG Bay & SuperMini)"
+    ))
+
+    print(f"16 sections written to {out_dir}")
 
 
 if __name__ == "__main__":

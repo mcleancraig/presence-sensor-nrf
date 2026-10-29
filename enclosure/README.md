@@ -1,72 +1,84 @@
-# Steam-Proof Bathroom & Outdoor Presence Sensor Enclosure (Bambu Lab A1)
+# Bathroom / Outdoor Presence Sensor Enclosures (3 Variants)
 
-3D-printable, gasketed enclosure for the **SuperMini nRF52840** (`nice!nano v2` clone), **Hi-Link HLK-LD2410S** 24 GHz mmWave human presence radar (`20.00 × 20.00 × 1.20 mm` square PCB with `R = 2.00 mm` corners and `2.54 mm` 5-pin `J2` header), and one unprotected **18650 Li-ion cell**, featuring a **100% solid outer lid face with a blind `1.2 mm` RF radome window** over the 24 GHz patch antenna array so bathroom shower steam cannot enter the enclosure.
+Parametric 3D-printable enclosures for the **SuperMini nRF52840 + Hi-Link HLK-LD2410S 24 GHz mmWave Radar + 18650** presence sensor, built with [CadQuery](https://cadquery.readthedocs.io/).
 
-![XZ section through the electronics lane](out/sections/y_electronics.png)
-![XZ section through the 18650 battery bay](out/sections/y_battery.png)
+All three enclosure variants share the same verified internal architecture (`82.0 × 48.0 × 24.0 mm` cavity, `0.000 mm³` boolean interference across all solid pairs, `1.20 mm` blind RF radome with `5.10 mm` antenna air gap) and are ready to slice in **Bambu Studio** for the **Bambu Lab A1** (`0.4 mm` nozzle, `0.20 mm` layer height, **Arachne** wall generator, **zero supports**):
 
-## Files
+| Variant | Printable STL Files | Purpose & Mounting Style |
+|---|---|---|
+| **Model 1: Sealed Gasketed Wall-Mount** | [`out/base.stl`](out/base.stl), [`out/lid.stl`](out/lid.stl) | Steam-proof bathroom/outdoor enclosure (`118.8 × 76.1 × 29.4 mm`) with an exterior `2 mm` EPDM O-ring gasket groove, 4× `M3` heat-set inserts, and `±X` wall-mount screw tabs. |
+| **Model 2: Angled 45° Corner / Ceiling Snap-Fit** | [`out/corner_base.stl`](out/corner_base.stl), [`out/corner_lid.stl`](out/corner_lid.stl), [`out/corner_bracket.stl`](out/corner_bracket.stl) | Compact flangeless snap-fit case (`86.8 × 56.4 × 29.4 mm`) that slides into a support-free **90° room-corner / ceiling bracket** holding the radar at a **45° downward pitch** into a `3 m³` bathroom. |
+| **Model 3: Freestanding Vanity / Shelf Pod (USB-C)** | [`out/vanity_base.stl`](out/vanity_base.stl), [`out/vanity_lid.stl`](out/vanity_lid.stl) | Sleek freestanding pod (`86.8 × 54.4 × 29.4 mm`) that stands upright on its flat `-Y` pedestal foot (heavy 18650 cell at the bottom for low CG, radar facing horizontally into the room) with a precision **`+X` USB-C pass-through port** for in-place 18650 recharging. |
 
-| File | Use |
-| :--- | :--- |
-| `out/base.step`, `out/lid.step` | **Import into Fusion / CAD** (`File → Open`). Each is a single watertight solid body (`solids=1`). |
-| `out/assembly.step` | Base + lid in their assembled positions. |
-| `out/fit_check.step` | Assembly plus high-fidelity dummy 18650 cell, contact plates, SuperMini nRF52840 (with `-Z` through-hole pin rows & `B+`/`B-` solder tails), and `20 × 20 mm` HLK-LD2410S radar (with `-Z` `J2` 5-pin header shroud/pins, `+Z` solder tails, `ICL1112` SoC, and `-Z` `YXC 3225` crystal). |
-| `out/base.stl`, `out/lid.stl` | Ready to slice in Bambu Studio / OrcaSlicer. `lid.stl` is already flipped top-face-down for a smooth bed finish and supportless printing. |
-| `out/sections/*.png` | 10 annotated 2D cross-sections (`z_mid_cell`, `z_board`, `z_radar`, `z_radome`, `z_flange`, `y_battery`, `y_electronics`, `x_center`, `x_radar`, `x_board`). |
-| `enclosure.py` | **Parametric CadQuery source.** All dimensions are named constants at the top of the file. |
-| `verify.py` | Rebuilds all STEP/STL files and runs automated boolean interference, solid validity, `+` contact reach, and `1.2 mm` radome thickness checks. |
-| `sections.py` | Re-renders all 10 2D cross-section PNGs in `out/sections/`. |
+---
 
-## Regenerating & Verifying After Parameter Edits
+## 1. Shared Internal Hardware & RF Radome Architecture
+
+| Component | Nominal Envelope | Cradle & Clearance Design |
+|---|---|---|
+| **Hi-Link HLK-LD2410S** (24 GHz 1T1R mmWave radar, Manual V1.2 §7 Fig. 7-1) | **`20.00 × 20.00 × 1.20 mm`** square PCB (`R = 2.00 mm` rounded corners; `J2` 5-pin `2.54 mm` header on `+X` edge) | Elevated in `+Y` lane (`RADAR_X = -19.5 mm, Y_ELEC = +10.4 mm`) on `RADAR_RAIL_H = 19.5 mm` rails (`0.8 mm` `±Y` ledges recessed `3.5 mm` from `+X` and `2.5 mm` from `-X`). Single `(+X, -Y)` corner stop leaves `J2` (`Pin 5 OT2` at `1.62 mm` .. `Pin 1 3V3` at `11.78 mm` from `+Y`) and the `19.5 mm` under-radar bay 100% open. |
+| **Blind RF Radome Window** (All 3 Lids: `lid`, `corner_lid`, `vanity_lid`) | **`22.0 × 22.0 mm`** interior pocket (`RADOME_T = 1.20 mm`) | Leaves a uniform **`1.20 mm`** solid outer top wall (`< 0.2 dB` one-way loss at `24.125 GHz`, $\lambda_0 \approx 12.5\text{ mm}$) with a **`5.10 mm` (`~0.41 λ₀`) antenna-to-radome air gap**. |
+| **SuperMini nRF52840** (Pro Micro form-factor BLE board) | **`33.0 × 18.0 × 1.2 mm`** (`24` through-hole pins along `±Y`, `B+`/`B-` pads at `-X`, USB-C at `+X`) | Supported on `BOARD_RAIL_H = 4.5 mm` corner pads (outside the `28.0 mm` `±Y` 12-pin rows and `-X` `B+`/`B-` pads) plus two inset longitudinal rails (`3.3 mm` inside `±Y` edges), leaving `2.0 mm` vertical clearance below `2.5 mm` through-hole solder tails. Positioned at `BOARD_X = +20.5 mm` (Models 1 & 2) or `BOARD_X_VANITY = +24.0 mm` (`0.5 mm` from `+X` wall in Model 3 for USB-C pass-through). |
+| **18650 Li-ion Cell + Bare Leaf-Spring Plates** | **`Ø18.4 × 65.0 mm`** flat-top cell + two **`12.0 × 12.0 × 0.5 mm`** nickel plates | Retained in a `69.0 mm` bay (`Y_BAT = -12.3 mm`) with `0.60 mm` retaining lips (**slice with Arachne**) and `+` contact reach of **`0.50 mm >= 0.30 mm`** past the lip face. |
+
+---
+
+## 2. Detailed Variant Descriptions
+
+### Model 1: Sealed Gasketed Wall-Mount (`base.stl`, `lid.stl`)
+- **Outer Envelope**: `118.8 × 76.1 × 29.4 mm` (`82.0 × 48.0 × 24.0 mm` interior cavity).
+- **Ingress Protection**: Continuous `2.2 × 1.5 mm` gasket groove (`GROOVE_OFFSET = 3.6 mm`) for `2 mm` EPDM/silicone O-ring cord or printed TPU gasket, compressed by 4× `M3 × 8 mm` stainless screws into `M3 × 5.7 × 4.6 mm` heat-set inserts (`SCREW_OFFSET = 6.4 mm`) located outside the sealed cavity.
+- **Mounting**: Two `4.0 mm` thick `±X` wall-mount tabs with `Ø4.5 mm` clearance holes at `X = ±54.9 mm`.
+
+### Model 2: Angled 45° Corner / Ceiling Snap-Fit (`corner_base.stl`, `corner_lid.stl`, `corner_bracket.stl`)
+- **Outer Case Envelope**: `86.8 × 56.4 × 29.4 mm` (compact flangeless profile; no heat-set inserts or lid screws required).
+- **Tool-less 4-Point Cantilever Snap-Fit**: `corner_lid` features a `2.0 mm` deep perimeter splash-guard lip with 4 outward snap beads (`X = ±22.0 mm, Y = ±24.15 mm`) that latch into matching internal receiver grooves in `corner_base` (`0.000 mm³` interference in the closed position), plus two `±X` fingernail/flathead pry slots (`8.0 × 0.9 mm`) for easy battery access.
+- **45° Room-Corner / Ceiling Bracket (`corner_bracket.stl`)**:
+  - Two orthogonal `90°` mounting wings tilted at `±45°` (with 4× `Ø4.2 mm` screw holes and flat surfaces for 3M VHB / Command strips) nest flush into any `90°` wall-to-wall corner or ceiling-to-wall junction, aiming the HLK-LD2410S antenna normal at **45° downward** into a `3 m³` bathroom.
+  - Integral `±Y` C-channel jaws (`0.40 mm` clearance) capture the lower slide rails on `corner_base` (`Z = 0 .. 2.0 mm`) against a `+X` end stop so the sensor slides out tool-free for charging.
+
+### Model 3: Freestanding Shelf / Vanity Pod with USB-C Pass-Through (`vanity_base.stl`, `vanity_lid.stl`)
+- **Outer Envelope**: `86.8 × 54.4 × 29.4 mm`.
+- **Upright Low-CG Shelf Posture**: A flat `72.0 × 29.4 mm` pedestal foot along the `-Y` exterior wall (`Y = -28.0 mm`, flush across both `vanity_base` and `vanity_lid`) lets the pod stand upright on a bathroom vanity, shelf, or cistern with the heavy 18650 cell at the bottom (`Y_BAT = -12.3 mm`) and the HLK-LD2410S facing horizontally into the room.
+- **In-Place USB-C Recharging Port**: Aligns the SuperMini nRF52840 at `BOARD_X_VANITY = +24.0 mm` (`0.50 mm` from the `+X` cavity wall) behind a `9.6 × 3.8 mm` rounded USB-C pass-through slot and a `13.0 × 7.6 × 1.0 mm` exterior overmold counterbore (`Z_USBC = 9.7 mm`), braced at `-X` by dual corner stops to absorb plug insertion force.
+
+---
+
+## 3. Bill of Materials (BOM)
+
+| Qty | Item | Models Used |
+|---|---|---|
+| 1 | **SuperMini nRF52840** (`33 × 18 mm` Pro Micro BLE board) | All (1, 2, 3) |
+| 1 | **Hi-Link HLK-LD2410S** (`20.0 × 20.0 × 1.2 mm` 24 GHz mmWave sensor + `2.54 mm` 5-pin `J2` header) | All (1, 2, 3) |
+| 1 | **Flat-top unprotected 18650 Li-ion cell** (`Ø18.4 × 65.0 mm`) | All (1, 2, 3) |
+| 1 pair | **18650 bare nickel-plated battery contact plates** (`12 × 12 × 0.5 mm`, 1× conical spring `-`, 1× dimple `+`) | All (1, 2, 3) |
+| 4 | **M3 × 5.7 × 4.6 mm brass heat-set inserts** + **4× M3 × 8 mm A2/A4 stainless screws** | Model 1 only |
+| ~270 mm | **2.0 mm Ø EPDM or silicone O-ring cord** (or printed 95A TPU gasket loop) | Model 1 only |
+
+---
+
+## 4. Recommended Print Settings (Bambu Lab A1 / Bambu Studio)
+
+- **Filament**: **PETG** or **ASA** in light/neutral color (avoid carbon-fiber or metallic-flake pigments over the `1.2 mm` radome).
+- **Nozzle / Layer Height**: `0.4 mm` nozzle, **`0.20 mm` layer height** (renders the `1.20 mm` radome as 6 solid layers).
+- **Wall Generator**: **Arachne** (mandatory so the `0.60 mm` 18650 contact-plate retaining lips print cleanly).
+- **Supports**: **None (`Disable Support`)** — all exported `.stl` files are pre-oriented for support-free printing:
+  - `base.stl`, `corner_base.stl`, `vanity_base.stl`: upright on `Z = 0` underside.
+  - `lid.stl`, `corner_lid.stl`, `vanity_lid.stl`: flipped `180°` so the flat outer top surface lies directly on the build plate.
+  - `corner_bracket.stl`: rotated `90°` onto its flat `-X` end face so the `90°` V-wings and C-channel jaws extrude vertically with zero overhangs.
+
+---
+
+## 5. Regenerating CAD Artifacts & Running Verification
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python verify.py      # rebuilds out/*.step and out/*.stl, verifies 0.000 mm^3 overlap
-.venv/bin/python sections.py    # re-renders out/sections/*.png
+cd enclosure
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# Build all 3 models, export all .step/.stl files, and run 45-pair boolean & radome verification:
+.venv/bin/python verify.py
+
+# Render all 16 2D cross-section PNGs to out/sections/*.png:
+.venv/bin/python sections.py
 ```
-
-`enclosure.py` enforces design rules in `check()` before exporting:
-- Exact HLK-LD2410S PCB dimensions (`20.0 × 20.0 × 1.2 mm`, `R = 2.0 mm` corners) and `19.5 mm` `-Z` clearance for the `2.54 mm` 5-pin `J2` header and wiring.
-- `+` battery contact dimple reach past the `0.6 mm` retaining lips (`0.50 mm >= 0.30 mm`).
-- Gasket groove clearance to the four blind M3 heat-set insert bosses (`>= 1.0 mm`).
-- Blind RF radome thickness (`RADOME_T = 1.2 mm`, `22.0 × 22.0 mm` pocket) and `5.10 mm` antenna-to-radome air gap for unobstructed $\pm 60^\circ$ FOV.
-
-## Mechanical Design Highlights
-
-- **Cavity (`82.0 × 48.0 × 24.0 mm`)**:
-  - **`-Y` Lane — 18650 Battery Bay**: Holds one unprotected flat-top 18650 cell (`Ø18.4 × 65.0 mm`) on two contoured saddles (`X = ±20.0 mm`). Nickel contact plates (`12 × 12 × 0.5 mm`, e.g. Keystone 5209 / leaf-spring + dimple pair) slide vertically into `0.8 mm` slots in the end blocks with `4.0 × 5.0 mm` rear wire exit notches. The front retaining lips are **`0.6 mm` thick** (`BLOCK_LIP = 0.6 mm`) so the `+` cap (`0.4 mm`) + plate dimple (`1.0 mm`) reach `0.50 mm` proud of the plastic lip face.
-  - **`+Y` Lane (`+X` Side) — Zero-Collision SuperMini nRF52840 Cradle (`X = +20.5 mm`)**: Elevates the `33.0 × 18.0 × 1.2 mm` PCB by **`BOARD_RAIL_H = 4.5 mm`** on 4 corner pads (outside the `28.0 mm` 12-pin rows) plus two inset longitudinal rails inside the pin rows. This leaves the entire `0.0 .. 2.2 mm` `±Y` through-hole pin rows and `-X` `B+`/`B-` pads completely unobstructed underneath (`2.0 mm` vertical clearance below `2.5 mm` solder tails) with wide-open `-X` and `-Y` cable routing channels.
-  - **`+Y` Lane (`-X` Side) — Zero-Collision HLK-LD2410S Radar Cradle (`X = -19.5 mm`)**: Purpose-built for the real **`20.00 × 20.00 × 1.20 mm`** (`R = 2.00 mm` corners) Hi-Link HLK-LD2410S module (`RADAR_RAIL_H = 19.5 mm`):
-    - Orients the asymmetric `2.54 mm` 5-pin `J2` header (`Pin 5 OT2 = 1.62 mm`, `Pin 4 RX = 4.16 mm`, `Pin 3 OT1 = 6.70 mm`, `Pin 2 GND = 9.24 mm`, `Pin 1 3V3 = 11.78 mm` from `+Y` edge) on the **`+X` edge** facing the SuperMini.
-    - Recesses the `±Y` support ledges by **`3.5 mm` from `+X`** (so the entire `J2` 5-pin header shroud and solder fillets have zero under-board ledge collision) and **`2.5 mm` from `-X`** (clearing the `-Z` `YXC 3225` crystal and `J1` SWD pads).
-    - Places `+X` axial retention exclusively on the bare **`(+X, -Y)` corner** (`> 3.0 mm` away from `Pin 1 3V3`), leaving `(+X, +Y)` and the entire space below `J2` (`19.5 mm` height) 100% open for the 5 wires (`3V3`, `GND`, `OT1/TX`, `RX`, `OT2`) and an optional `10–47 µF` decoupling capacitor across adjacent `Pin 1 (3V3)` and `Pin 2 (GND)`.
-- **Steam-Proof Lid with Blind `1.2 mm` RF Radome Window (`22.0 × 22.0 mm`)**:
-  - The outer top surface of the `3.0 mm` lid is **100% continuous solid plastic** with zero through-holes inside the gasket perimeter.
-  - On the interior underside of the lid directly over the `20 × 20 mm` HLK-LD2410S (`X = -19.5 mm, Y = +10.4 mm`), a `22.0 × 22.0 × 1.8 mm` blind pocket thins the lid to **`RADOME_T = 1.2 mm`** ($\approx 0.1\lambda$ at 24 GHz, $< 0.2\text{ dB}$ one-way RF loss in PETG/ASA) with a `5.10 mm` antenna-to-radome air gap (`3.30 mm` clearance above the `1.8 mm` `+Z` `J2` solder tails), preventing $\pm 60^\circ$ beam shadowing.
-- **Gasket Seal & Blind M3 Heat-Set Inserts**:
-  - The `8.0 × 7.0 mm` top flange has a 45° supportless underside chamfer, a `2.2 × 1.5 mm` groove for `2.0 mm` EPDM/silicone O-ring cord (or printed TPU gasket), and 4 blind `Ø4.0 × 6.0 mm` holes **outside** the gasket loop for `M3 × 5.7 × 4.6 mm` brass heat-set inserts.
-
-## Bambu Lab A1 Slicing Settings
-
-| Parameter | Recommended Setting (Bambu Studio / OrcaSlicer) |
-| :--- | :--- |
-| **Printer & Nozzle** | Bambu Lab A1 (`0.4 mm` hardened or stainless nozzle) |
-| **Filament** | **PETG** or **ASA** (recommended for bathroom humidity/warm shower steam; PLA works for dry indoor rooms) |
-| **Layer Height** | `0.20 mm` Standard (`0.20 mm Standard @BBL A1`) |
-| **Wall Generator** | **Arachne** *(Required so the `0.6 mm` battery slot retaining lips print cleanly as a single variable-width perimeter)* |
-| **Wall Loops** | `3` walls (`2.4 mm` enclosure walls print solid) |
-| **Top / Bottom Shell Layers** | `4` top / `4` bottom layers (`>= 0.8 mm` solid skin; the `1.2 mm` blind radome window prints as `6` solid layers with 100% density) |
-| **Infill** | `15%–20%` Gyroid |
-| **Supports** | **None (`Disable`)** — both `base.stl` (45° flange chamfer, vertical rails) and `lid.stl` (pre-flipped flat top on build plate) print 100% support-free |
-
-## Bill of Materials (Mechanical)
-
-| Qty | Component | Notes |
-| :---: | :--- | :--- |
-| 1 | Printed `base.stl` + `lid.stl` | PETG or ASA on Bambu Lab A1 |
-| 4 | **M3 × 5.7 × 4.6 mm** brass heat-set inserts | Press into the 4 blind `Ø4.0 × 6.0 mm` flange holes at `200–220 °C` |
-| 4 | **M3 × 8 mm** or **M3 × 10 mm** stainless BHCS / SHCS screws | Pass through lid `Ø3.4 mm` clearance holes into flange inserts |
-| 1 | **2.0 mm** EPDM / silicone O-ring cord (~`290 mm` loop) | Press into the `2.2 × 1.5 mm` flange groove (`0.5 mm` seal compression) |
-| 1 pair | **12 × 12 × 0.5 mm** 18650 nickel contact plates | 1 × spring (`-`) + 1 × dimple (`+`, `1.0 mm` dimple height, e.g. Keystone 5209) |
-| 1 | Unprotected flat-top **18650 Li-ion cell** | `Ø18.4 × 65.0 mm` (`3000–3500 mAh`, e.g. Samsung 35E / Molicel M35A) |

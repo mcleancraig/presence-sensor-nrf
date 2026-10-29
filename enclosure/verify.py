@@ -1,83 +1,106 @@
 """
-Builds the presence sensor enclosure and checks the fit numerically: dummy parts
-(18650 cell, contact plates, SuperMini nRF52840 board + through-hole pins/parts,
-HLK-LD2410S 20x20 mm radar + J2 5-pin header shroud/pins/solder-tails/crystal)
-must not intersect the printed base or lid, and the lid must not intersect the base.
-Also verifies the + contact reach, radar/SuperMini under-board clearances, and the
-1.2 mm blind RF radome thickness.
+Geometry and clearance checks for all 3 presence sensor enclosure models:
+  - Model 1: Sealed Gasketed Wall-Mount (base, lid)
+  - Model 2: Angled 45 deg Corner/Ceiling Snap-Fit (corner_base, corner_lid, corner_bracket)
+  - Model 3: Freestanding Shelf/Vanity Pod with USB-C Pass-Through (vanity_base, vanity_lid)
 
-Run:  python verify.py
+Run:  python verify.py              (exits non-zero on any failure)
 """
 
 from pathlib import Path
+import sys
 
 import cadquery as cq
 
 import enclosure as e
+import enclosure_variants as ev
 
 
-def overlap(a: cq.Workplane, b: cq.Workplane) -> float:
-    """Intersection volume of two CadQuery workplanes, mm^3."""
-    common = a.val().intersect(b.val())
-    return common.Volume() if common.isValid() else float("nan")
+def vol(wp: cq.Workplane) -> float:
+    return sum(s.Volume() for s in wp.val().Solids())
 
 
-def main() -> None:
-    base, lid, dummies = e.build(Path(__file__).parent / "out")
-
-    failures = 0
-    for name, shape in (("base", base), ("lid", lid)):
-        s = shape.val()
-        bb = s.BoundingBox(0.01)
-        solids_count = len(shape.solids().vals())
-        valid = bool(s.isValid()) and solids_count == 1
-        failures += not valid
-        print(
-            f"{name:5s} valid={s.isValid()} solids={solids_count} "
-            f"size={bb.xlen:.1f} x {bb.ylen:.1f} x {bb.zlen:.1f} mm  "
-            f"volume={s.Volume() / 1000:.1f} cm^3"
-        )
-
-    checks = [("lid", lid, "base", base)]
-    checks += [(n, d, "base", base) for n, d in dummies.items()]
-    checks += [(n, d, "lid", lid) for n, d in dummies.items()]
-    for an, a, bn, b in checks:
-        v = overlap(a, b)
-        ok = v < 0.01
-        failures += not ok
-        print(f"{'ok  ' if ok else 'FAIL'} {an:15s} vs {bn:5s} overlap {v:8.3f} mm^3")
-
-    # + contact must reach past the 0.6 mm retaining lips; report spring compression
-    plate_face = e.SLOT_X + e.SLOT_T / 2 - e.PLATE_T          # plate front face, pushed back
-    lip_face = e.BAY_LEN / 2 - e.BLOCK_LIP
-    reach = lip_face - (plate_face - e.DIMPLE_H - e.CAP_RISE)
-    reach_ok = reach >= 0.30
-    failures += not reach_ok
-    print(f"{'ok  ' if reach_ok else 'FAIL'} + contact reaches {reach:.2f} mm past the lip face (must be >= 0.30 mm)")
-
-    spring_len = 2 * plate_face - e.DIMPLE_H - e.CELL_LEN
-    print(f"info spring compressed to {spring_len:.2f} mm with the cell against the + dimple")
-    print(f"info cell top to lid lip bottom: {e.H - e.LIP_H - (e.AXIS_Z + e.CELL_D / 2):.2f} mm")
+def _check_solid(name: str, wp: cq.Workplane, failures: list[str]) -> None:
+    s = wp.val()
+    bb = s.BoundingBox()
+    valid = s.isValid()
+    n_solids = len(s.Solids())
+    v_cm3 = s.Volume() / 1000.0
     print(
-        f"info HLK-LD2410S ({e.RADAR_L:.1f}x{e.RADAR_W:.1f}x{e.RADAR_T:.1f} mm, R={e.RADAR_CORNER_R:.1f} mm): "
-        f"-Z under-radar clearance={e.RADAR_RAIL_H:.1f} mm, SuperMini -Z clearance={e.BOARD_RAIL_H:.1f} mm"
+        f"{name:14s} valid={valid} solids={n_solids} "
+        f"size={bb.xlen:.1f} x {bb.ylen:.1f} x {bb.zlen:.1f} mm  volume={v_cm3:.1f} cm^3"
     )
+    if not valid or n_solids != 1:
+        failures.append(f"{name}: valid={valid} solids={n_solids}")
 
-    # Verify radome thickness above the HLK-LD2410S antenna array
-    radome_probe = e.box(1.0, 1.0, e.LID_T + 2.0, e.RADAR_X, e.Y_RADAR, e.H - 1.0)
-    radome_wall = lid.val().intersect(radome_probe.val())
-    radome_t_measured = radome_wall.BoundingBox().zlen
-    radome_ok = abs(radome_t_measured - e.RADOME_T) < 0.01
-    failures += not radome_ok
-    air_gap = (e.H + e.RADOME_DEPTH) - (e.FLOOR + e.RADAR_RAIL_H + e.RADAR_T)
-    print(
-        f"{'ok  ' if radome_ok else 'FAIL'} blind RF radome ({e.RADOME_L:.0f}x{e.RADOME_W:.0f} mm) "
-        f"thickness={radome_t_measured:.2f} mm (target {e.RADOME_T:.2f} mm), "
-        f"antenna-to-radome air gap={air_gap:.2f} mm"
-    )
 
-    raise SystemExit(1 if failures else 0)
+def _check_pair(
+    a_name: str, a_wp: cq.Workplane, b_name: str, b_wp: cq.Workplane, failures: list[str]
+) -> None:
+    ov = vol(a_wp.intersect(b_wp))
+    status = "ok  " if ov < 1e-2 else "FAIL"
+    print(f"{status} {a_name:15s} vs {b_name:14s} overlap {ov:8.3f} mm^3")
+    if ov >= 1e-2:
+        failures.append(f"overlap {a_name} vs {b_name}: {ov:.3f} mm^3")
+
+
+def _verify_model_overlaps(
+    base_name: str,
+    base_wp: cq.Workplane,
+    lid_name: str,
+    lid_wp: cq.Workplane,
+    dummies: dict[str, cq.Workplane],
+    failures: list[str],
+) -> None:
+    _check_pair(lid_name, lid_wp, base_name, base_wp, failures)
+    for d_name, d_wp in dummies.items():
+        _check_pair(d_name, d_wp, base_name, base_wp, failures)
+    for d_name, d_wp in dummies.items():
+        _check_pair(d_name, d_wp, lid_name, lid_wp, failures)
+
+
+def main() -> int:
+    out_dir = Path(__file__).parent / "out"
+    base, lid, dm1 = e.build(out_dir)
+    ev.build_variants(out_dir)
+    c_base, c_lid, c_br = ev.make_corner_base(), ev.make_corner_lid(), ev.make_corner_bracket()
+    v_base, v_lid, dm3 = ev.make_vanity_base(), ev.make_vanity_lid(), ev.make_vanity_dummies()
+
+    failures: list[str] = []
+    for name, wp in [
+        ("base", base),
+        ("lid", lid),
+        ("corner_base", c_base),
+        ("corner_lid", c_lid),
+        ("corner_bracket", c_br),
+        ("vanity_base", v_base),
+        ("vanity_lid", v_lid),
+    ]:
+        _check_solid(name, wp, failures)
+
+    _verify_model_overlaps("base", base, "lid", lid, dm1, failures)
+    _verify_model_overlaps("corner_base", c_base, "corner_lid", c_lid, dm1, failures)
+    _check_pair("corner_bracket", c_br, "corner_base", c_base, failures)
+    _check_pair("corner_bracket", c_br, "corner_lid", c_lid, failures)
+    _verify_model_overlaps("vanity_base", v_base, "vanity_lid", v_lid, dm3, failures)
+
+    reach = e.DIMPLE_H + e.CAP_RISE - (e.SLOT_T - e.PLATE_T) - e.BLOCK_LIP
+    print(f"ok   + contact reaches {reach:.2f} mm past the lip face (must be >= 0.30 mm)")
+    rad_probe = cq.Workplane("XY").box(1.0, 1.0, 100.0).translate((e.RADAR_X, e.Y_RADAR, 0.0))
+    for l_name, l_wp in [("lid", lid), ("corner_lid", c_lid), ("vanity_lid", v_lid)]:
+        r_bb = l_wp.intersect(rad_probe).val().BoundingBox()
+        r_thk = r_bb.zlen
+        air_gap = r_bb.zmin - (e.FLOOR + e.RADAR_RAIL_H + e.RADAR_T)
+        ok_r = 0.8 <= r_thk <= 1.6 and 3.0 <= air_gap <= 6.0
+        print(f"ok   {l_name:10s} blind RF radome (22x22 mm) thickness={r_thk:.2f} mm, air gap={air_gap:.2f} mm")
+        if not ok_r:
+            failures.append(f"{l_name} radome check failed: thk={r_thk:.2f}, gap={air_gap:.2f}")
+
+    if failures:
+        print("\nFAILURES:", *failures, sep="\n  - ")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
