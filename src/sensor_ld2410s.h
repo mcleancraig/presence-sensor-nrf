@@ -14,12 +14,15 @@ class SensorLd2410s {
 public:
     using Ot2EdgeCallback = void (*)();
 
-    // Bounded UART wake window when sampling target distance on OT2 assertion
+    // Bounded UART wake window when sampling target distance
     // (1150 ms spans a full 1.0 Hz report period + 150 ms margin while returning
-    // and suspending uart0 immediately upon receiving the first valid 5-byte frame)
+    // and suspending uart0 immediately upon receiving the first valid report frame)
     static constexpr uint32_t kDefaultSampleTimeoutMs = 1150;
-    static constexpr uint32_t kAckTimeoutMs           = 150;
-    static constexpr int      kConfigMaxRetries       = 3;
+    static constexpr uint32_t kAckTimeoutMs           = 500;
+    static constexpr uint32_t kRadarBootSettleMs      = 1000;
+    static constexpr uint32_t kInterCommandDelayMs    = 50;
+    static constexpr int      kConfigMaxRetries       = 5;
+    static constexpr size_t   kRxRingSize             = 256;
 
     SensorLd2410s();
 
@@ -52,9 +55,11 @@ public:
 
 private:
     static void OnOt2GpioIsr(const struct device *port, struct gpio_callback *cb, uint32_t pins);
+    static void OnUartIsr(const struct device *dev, void *userData);
 
     int ResumeUart();
     int SuspendUart();
+    bool PopRxByte(uint8_t *outByte);
     void DrainUartRx();
     void SendBytes(const uint8_t *data, size_t len);
     bool SendCommandAndWaitAck(const uint8_t *cmdBuf, size_t cmdLen, uint16_t expectedCmdWord, uint32_t timeoutMs);
@@ -65,6 +70,10 @@ private:
     struct gpio_callback    mOt2CbData;
     Ot2EdgeCallback         mEdgeCallback;
     Ld2410sFrameParser      mParser;
+    struct k_sem            mRxSem;
+    uint8_t                 mRxRing[kRxRingSize];
+    volatile uint32_t       mRxHead;
+    volatile uint32_t       mRxTail;
     uint16_t                mLastDistanceMm;
     bool                    mUartSuspended;
     bool                    mRadarConfigured;

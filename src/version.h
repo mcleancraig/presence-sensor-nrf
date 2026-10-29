@@ -9,10 +9,10 @@
 
 #define APP_VERSION_MAJOR 1
 #define APP_VERSION_MINOR 0
-#define APP_VERSION_PATCH 0
-#define APP_BUILD_NUMBER  2
+#define APP_VERSION_PATCH 1
+#define APP_BUILD_NUMBER  3
 
-#define APP_VERSION_STRING "1.0.0"
+#define APP_VERSION_STRING "1.0.1"
 
 static constexpr uint32_t kAppSoftwareVersion =
     (static_cast<uint32_t>(APP_VERSION_MAJOR) << 16) |

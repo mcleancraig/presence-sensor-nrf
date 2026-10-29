@@ -13,7 +13,7 @@ struct BthomeMeasurement {
     uint8_t  batteryPct;    // 0..100 % (Object 0x01)
     uint16_t voltageMv;     // Millivolts, factor 0.001 V (Object 0x0C)
     bool     motion;        // 1 = moving target, 0 = clear (Object 0x21)
-    bool     occupancy;     // 1 = occupied, 0 = clear (Object 0x2D)
+    bool     occupancy;     // 1 = occupied, 0 = clear (Object 0x23)
     uint16_t distanceMm;    // Millimeters, factor 0.001 m (Object 0x40)
 };
 
@@ -29,8 +29,8 @@ static constexpr uint8_t  kDeviceInfoV2Unencrypted   = 0x40u; // v2 (bits 5..7 =
 static constexpr uint8_t  kObjPacketId               = 0x00u; // uint8 (1 byte)
 static constexpr uint8_t  kObjBatteryPct             = 0x01u; // uint8 (1 byte, %)
 static constexpr uint8_t  kObjVoltageMv              = 0x0Cu; // uint16 LE (2 bytes, 0.001 V)
-static constexpr uint8_t  kObjMotion                 = 0x21u; // uint8 (1 byte, bool)
-static constexpr uint8_t  kObjOccupancy              = 0x2Du; // uint8 (1 byte, bool)
+static constexpr uint8_t  kObjMotion                 = 0x21u; // uint8 (1 byte, bool: 0=Clear, 1=Detected)
+static constexpr uint8_t  kObjOccupancy              = 0x23u; // uint8 (1 byte, bool: 0=Clear, 1=Detected)
 static constexpr uint8_t  kObjDistanceMm             = 0x40u; // uint16 LE (2 bytes, 0.001 m = mm)
 
 // Standard BLE Advertising Data types

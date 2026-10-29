@@ -12,11 +12,12 @@ LOG_MODULE_REGISTER(app_task, LOG_LEVEL_INF);
 
 namespace {
 
-static constexpr uint32_t kEvtOt2Edge       = BIT(0);
-static constexpr uint32_t kEvtOccupiedPoll  = BIT(1);
-static constexpr uint32_t kEvtHeartbeat     = BIT(2);
-static constexpr uint32_t kEvtBatterySample = BIT(3);
-static constexpr uint32_t kEvtBurstDone     = BIT(4);
+static constexpr uint32_t kEvtOt2Edge              = BIT(0);
+static constexpr uint32_t kEvtOccupiedPoll         = BIT(1);
+static constexpr uint32_t kEvtHeartbeat            = BIT(2);
+static constexpr uint32_t kEvtBatterySample        = BIT(3);
+static constexpr uint32_t kEvtBurstDone            = BIT(4);
+static constexpr uint16_t kDistanceBurstThresholdMm = 100u;
 
 } // namespace
 
@@ -24,6 +25,7 @@ AppTask::AppTask()
     : mBatteryStatus{BatteryMonitor::VOLTAGE_NOMINAL_MV, 50, BatteryChargeLevel::OK, false},
       mLastRadarReport{Ld2410sTargetState::Unoccupied, false, false, 0, 0, true},
       mPendingEvents(ATOMIC_INIT(0)),
+      mLastPublishedDistanceMm(0u),
       mLastOccupied(false),
       mLastMotion(false)
 {
@@ -90,7 +92,7 @@ void AppTask::PublishCurrentState(bool burst)
     mAdvertiser.Publish(m, burst);
 }
 
-void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst)
+void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
 {
     Ld2410sReport report{};
     mRadar.SampleTargetReport(&report);
@@ -99,19 +101,21 @@ void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst)
     const bool stateChanged = (report.occupied != mLastOccupied) ||
                               (report.motion != mLastMotion);
     const bool occupancyEdge = (report.occupied != mLastOccupied);
+    const bool distanceChanged = (report.distanceMm != mLastPublishedDistanceMm);
+    const uint16_t distDeltaMm = (report.distanceMm > mLastPublishedDistanceMm)
+                                     ? (report.distanceMm - mLastPublishedDistanceMm)
+                                     : (mLastPublishedDistanceMm - report.distanceMm);
+    const bool significantDistChange = report.occupied &&
+                                       (distDeltaMm >= kDistanceBurstThresholdMm);
 
     mLastOccupied = report.occupied;
     mLastMotion   = report.motion;
 
-    if (report.occupied) {
-        k_timer_start(&mOccupiedPollTimer,
-                      K_SECONDS(CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC),
-                      K_SECONDS(CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC));
-    } else {
-        k_timer_stop(&mOccupiedPollTimer);
+    const bool shouldBurst = forceBurst || occupancyEdge || stateChanged || significantDistChange;
+    if (shouldBurst || forcePublish || distanceChanged) {
+        mLastPublishedDistanceMm = report.distanceMm;
+        PublishCurrentState(shouldBurst);
     }
-
-    PublishCurrentState(forceBurst || occupancyEdge || stateChanged);
 }
 
 int AppTask::Start()
@@ -149,10 +153,16 @@ int AppTask::Start()
         return ret;
     }
 
-    // 4. Perform initial radar sample and broadcast initial burst advertisement
-    HandleOt2AndDistanceUpdate(true);
+    // Ensure P0.15 status LED is strictly OFF before entering the low-power event loop
+    StatusLed::Instance().Set(false);
 
-    // 5. Start periodic low-power timers
+    // 4. Perform initial radar sample and broadcast initial burst advertisement
+    HandleOt2AndDistanceUpdate(true, true);
+
+    // 5. Start periodic low-power timers (5 s radar UART poll + 60 s heartbeat + 6 h battery)
+    k_timer_start(&mOccupiedPollTimer,
+                  K_SECONDS(CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC),
+                  K_SECONDS(CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC));
     k_timer_start(&mHeartbeatTimer,
                   K_SECONDS(CONFIG_APP_HEARTBEAT_INTERVAL_SEC),
                   K_SECONDS(CONFIG_APP_HEARTBEAT_INTERVAL_SEC));
@@ -160,7 +170,8 @@ int AppTask::Start()
                   K_SECONDS(CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC),
                   K_SECONDS(CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC));
 
-    LOG_INF("Entering System ON low-power event loop (heartbeat=%ds, battery=%ds)",
+    LOG_INF("Entering System ON low-power event loop (poll=%ds, heartbeat=%ds, battery=%ds)",
+            CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC,
             CONFIG_APP_HEARTBEAT_INTERVAL_SEC,
             CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC);
 
@@ -177,11 +188,12 @@ int AppTask::Start()
             SampleBattery();
         }
 
-        if (events & kEvtOt2Edge) {
-            HandleOt2AndDistanceUpdate(true);
-        } else if (events & kEvtOccupiedPoll) {
-            HandleOt2AndDistanceUpdate(false);
-        } else if (events & kEvtHeartbeat) {
+        const bool forceBurst   = (events & kEvtOt2Edge) != 0u;
+        const bool forcePublish = (events & kEvtHeartbeat) != 0u;
+
+        if (events & (kEvtOt2Edge | kEvtOccupiedPoll)) {
+            HandleOt2AndDistanceUpdate(forceBurst, forcePublish);
+        } else if (forcePublish) {
             PublishCurrentState(false);
         }
     }

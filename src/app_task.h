@@ -42,7 +42,7 @@ private:
     static void OnBatteryTimer(struct k_timer *timer);
 
     void PostEvent(uint32_t eventMask);
-    void HandleOt2AndDistanceUpdate(bool forceBurst);
+    void HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish = false);
     void SampleBattery();
     void PublishCurrentState(bool burst);
 
@@ -55,6 +55,7 @@ private:
     struct k_timer     mHeartbeatTimer;
     struct k_timer     mOccupiedPollTimer;
     struct k_timer     mBatteryTimer;
+    uint16_t           mLastPublishedDistanceMm;
     bool               mLastOccupied;
     bool               mLastMotion;
 };

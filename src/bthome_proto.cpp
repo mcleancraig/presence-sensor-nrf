@@ -37,7 +37,7 @@ size_t EncodeServiceData(const BthomeMeasurement &m, uint8_t *outBuf, size_t max
     outBuf[10] = kObjMotion;
     outBuf[11] = m.motion ? 1u : 0u;
 
-    // Object 0x2D: occupancy (uint8, boolean 0/1)
+    // Object 0x23: occupancy (uint8, boolean 0/1)
     outBuf[12] = kObjOccupancy;
     outBuf[13] = m.occupancy ? 1u : 0u;
 

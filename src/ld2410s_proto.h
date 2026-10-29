@@ -129,7 +129,8 @@ size_t BuildSwitchOutputModeCmd(uint32_t outputMode, uint8_t *outBuf, size_t max
  */
 class Ld2410sFrameParser {
 public:
-    static constexpr size_t kMaxFrameBufferSize = 128;
+    static constexpr size_t kMaxFrameBufferSize = 160;
+    static constexpr size_t kMaxPayloadSize     = 128;
 
     Ld2410sFrameParser();
 

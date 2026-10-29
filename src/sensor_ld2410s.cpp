@@ -47,6 +47,9 @@ SensorLd2410s::SensorLd2410s()
     : mUartDev(DEVICE_DT_GET_OR_NULL(DT_NODELABEL(uart0))),
       mOt2Gpio(GPIO_DT_SPEC_GET_OR(ZEPHYR_USER_NODE, presence_ot2_gpios, {0})),
       mEdgeCallback(nullptr),
+      mRxRing{},
+      mRxHead(0),
+      mRxTail(0),
       mLastDistanceMm(0),
       mUartSuspended(false),
       mRadarConfigured(false)
@@ -63,21 +66,59 @@ void SensorLd2410s::OnOt2GpioIsr(const struct device *port, struct gpio_callback
     }
 }
 
+void SensorLd2410s::OnUartIsr(const struct device *dev, void *userData)
+{
+    auto *self = static_cast<SensorLd2410s *>(userData);
+    if (!self || !dev) {
+        return;
+    }
+
+    while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
+        if (uart_irq_rx_ready(dev)) {
+            uint8_t buf[32];
+            int recvLen = uart_fifo_read(dev, buf, sizeof(buf));
+            if (recvLen > 0) {
+                for (int i = 0; i < recvLen; ++i) {
+                    const uint32_t head     = self->mRxHead;
+                    const uint32_t nextHead = (head + 1u) % kRxRingSize;
+                    if (nextHead != self->mRxTail) {
+                        self->mRxRing[head] = buf[i];
+                        self->mRxHead       = nextHead;
+                    }
+                }
+                k_sem_give(&self->mRxSem);
+            }
+        }
+    }
+}
+
+bool SensorLd2410s::PopRxByte(uint8_t *outByte)
+{
+    const uint32_t tail = mRxTail;
+    if (tail == mRxHead) {
+        return false;
+    }
+    *outByte = mRxRing[tail];
+    mRxTail  = (tail + 1u) % kRxRingSize;
+    return true;
+}
+
 int SensorLd2410s::ResumeUart()
 {
     if (!mUartDev || !device_is_ready(mUartDev)) {
         return -ENODEV;
     }
-    if (!mUartSuspended) {
-        return 0;
-    }
-    int ret = pm_device_action_run(mUartDev, PM_DEVICE_ACTION_RESUME);
-    if (ret == 0 || ret == -EALREADY) {
+    if (mUartSuspended) {
+        int ret = pm_device_action_run(mUartDev, PM_DEVICE_ACTION_RESUME);
+        if (ret != 0 && ret != -EALREADY && ret != -ENOSYS) {
+            LOG_WRN("Failed to resume uart0 (err: %d)", ret);
+            return ret;
+        }
         mUartSuspended = false;
-        return 0;
+        k_busy_wait(200);
     }
-    LOG_WRN("Failed to resume uart0 (err: %d)", ret);
-    return ret;
+    uart_irq_rx_enable(mUartDev);
+    return 0;
 }
 
 int SensorLd2410s::SuspendUart()
@@ -85,11 +126,13 @@ int SensorLd2410s::SuspendUart()
     if (!mUartDev || !device_is_ready(mUartDev)) {
         return -ENODEV;
     }
+    uart_irq_rx_disable(mUartDev);
     if (mUartSuspended) {
         return 0;
     }
+    k_msleep(2);
     int ret = pm_device_action_run(mUartDev, PM_DEVICE_ACTION_SUSPEND);
-    if (ret == 0 || ret == -EALREADY) {
+    if (ret == 0 || ret == -EALREADY || ret == -ENOSYS) {
         mUartSuspended = true;
         return 0;
     }
@@ -99,13 +142,16 @@ int SensorLd2410s::SuspendUart()
 
 void SensorLd2410s::DrainUartRx()
 {
-    if (!mUartDev) {
-        return;
+    if (mUartDev) {
+        uint8_t dummy[32];
+        int maxDrain = 16;
+        while (maxDrain-- > 0 && uart_fifo_read(mUartDev, dummy, sizeof(dummy)) > 0) {
+        }
     }
-    uint8_t dummy = 0;
-    int maxDrain = 256;
-    while (maxDrain-- > 0 && uart_poll_in(mUartDev, &dummy) == 0) {
-    }
+    unsigned int key = irq_lock();
+    mRxTail = mRxHead;
+    irq_unlock(key);
+    k_sem_reset(&mRxSem);
     mParser.Reset();
 }
 
@@ -130,18 +176,22 @@ bool SensorLd2410s::SendCommandAndWaitAck(const uint8_t *cmdBuf,
     const uint16_t expectedAck = expectedCmdWord | Ld2410sProto::kAckBitMask;
     const int64_t deadline = k_uptime_get() + static_cast<int64_t>(timeoutMs);
 
-    while (k_uptime_get() < deadline) {
+    while (true) {
         uint8_t rxByte = 0;
-        if (uart_poll_in(mUartDev, &rxByte) == 0) {
+        while (PopRxByte(&rxByte)) {
             Ld2410sParsedFrame frame{};
             if (mParser.PushByte(rxByte, &frame) && frame.type == Ld2410sFrameType::Ack) {
                 if (frame.ack.ackCommandWord == expectedAck) {
                     return frame.ack.status == 0x0000u;
                 }
             }
-        } else {
-            k_msleep(1);
         }
+
+        const int64_t remainingMs = deadline - k_uptime_get();
+        if (remainingMs <= 0) {
+            break;
+        }
+        k_sem_take(&mRxSem, K_MSEC(remainingMs));
     }
     return false;
 }
@@ -167,13 +217,15 @@ int SensorLd2410s::ConfigureRadarParameters()
             entered = true;
             break;
         }
-        k_msleep(20);
+        k_msleep(kInterCommandDelayMs);
     }
 
     if (!entered) {
         LOG_WRN("HLK-LD2410S did not ACK EnterConfig (0x00FF); proceeding with OT2 GPIO + default radar profile");
         return -ETIMEDOUT;
     }
+
+    k_msleep(kInterCommandDelayMs);
 
     // 2. Write 3 m^3 bathroom gate & hold parameters (0x0070)
     const Ld2410sConfigParams params = {
@@ -190,12 +242,16 @@ int SensorLd2410s::ConfigureRadarParameters()
         LOG_WRN("HLK-LD2410S did not ACK WriteCommonParams (0x0070)");
     }
 
+    k_msleep(kInterCommandDelayMs);
+
     // 3. Switch to Minimal 5-Byte Output Format (0x007A -> 6E [state] [dist_lo] [dist_hi] 62)
     const size_t modeLen = Ld2410sProto::BuildSwitchOutputModeCmd(
         Ld2410sProto::kOutputModeMinimal, cmdBuf, sizeof(cmdBuf));
     if (!SendCommandAndWaitAck(cmdBuf, modeLen, Ld2410sProto::kCmdSwitchOutputMode, kAckTimeoutMs)) {
         LOG_WRN("HLK-LD2410S did not ACK SwitchOutputMode (0x007A)");
     }
+
+    k_msleep(kInterCommandDelayMs);
 
     // 4. Exit configuration mode (0x00FE)
     const size_t exitLen = Ld2410sProto::BuildExitConfigCmd(cmdBuf, sizeof(cmdBuf));
@@ -215,6 +271,13 @@ int SensorLd2410s::ConfigureRadarParameters()
 int SensorLd2410s::Init(Ot2EdgeCallback edgeCb)
 {
     mEdgeCallback = edgeCb;
+    k_sem_init(&mRxSem, 0, 1);
+
+    if (mUartDev && device_is_ready(mUartDev)) {
+        uart_irq_callback_user_data_set(mUartDev, OnUartIsr, this);
+    } else {
+        LOG_ERR("uart0 device not ready");
+    }
 
     if (mOt2Gpio.port == nullptr || !device_is_ready(mOt2Gpio.port)) {
         LOG_ERR("OT2 presence GPIO (P0.17) not ready");
@@ -242,8 +305,8 @@ int SensorLd2410s::Init(Ot2EdgeCallback edgeCb)
 
     LOG_INF("HLK-LD2410S OT2 interrupt armed on P0.%02d (GPIO_INT_EDGE_BOTH)", mOt2Gpio.pin);
 
-    // Allow HLK-LD2410S internal MCU to complete boot after P0.13 VCC power-on
-    k_msleep(80);
+    // Allow HLK-LD2410S internal PY32F030 MCU + ICL1112 MMIC to complete boot after P0.13 VCC power-on
+    k_msleep(kRadarBootSettleMs);
     ConfigureRadarParameters();
 
     // Ensure uart0 is suspended after boot configuration even if ScopedUartWake
@@ -268,18 +331,8 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
     }
 
     const bool pinOccupied = ReadPinOccupancy();
-    if (!pinOccupied) {
-        mLastDistanceMm            = 0;
-        outReport->state           = Ld2410sTargetState::Unoccupied;
-        outReport->occupied        = false;
-        outReport->motion          = false;
-        outReport->distanceCm      = 0;
-        outReport->distanceMm      = 0;
-        outReport->isMinimalFrame  = true;
-        return 0;
-    }
 
-    // OT2 is HIGH (occupied): briefly resume uart0 to read the latest target distance frame
+    // Briefly resume uart0 and enable RX interrupt to capture one report frame from the radar
     auto resumeCb = [](void *ctx) -> int { return static_cast<SensorLd2410s *>(ctx)->ResumeUart(); };
     auto suspendCb = [](void *ctx) -> int { return static_cast<SensorLd2410s *>(ctx)->SuspendUart(); };
     ScopedUartWake uartWake(resumeCb, suspendCb, this);
@@ -287,32 +340,54 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
     DrainUartRx();
 
     const int64_t deadline = k_uptime_get() + static_cast<int64_t>(timeoutMs);
-    while (k_uptime_get() < deadline) {
+    while (true) {
         uint8_t rxByte = 0;
-        if (uart_poll_in(mUartDev, &rxByte) == 0) {
+        while (PopRxByte(&rxByte)) {
             Ld2410sParsedFrame frame{};
             if (mParser.PushByte(rxByte, &frame) && frame.type == Ld2410sFrameType::Report) {
                 *outReport = frame.report;
-                // Keep hardware OT2 pin authoritative if asserted
                 if (pinOccupied && !outReport->occupied) {
                     outReport->occupied = true;
                 }
-                if (outReport->distanceMm > 0) {
-                    mLastDistanceMm = outReport->distanceMm;
+                if (outReport->occupied) {
+                    if (outReport->distanceMm > 0) {
+                        mLastDistanceMm = outReport->distanceMm;
+                    } else if (mLastDistanceMm > 0) {
+                        outReport->distanceMm = mLastDistanceMm;
+                        outReport->distanceCm = static_cast<uint16_t>(mLastDistanceMm / 10u);
+                    }
+                } else {
+                    mLastDistanceMm       = 0;
+                    outReport->distanceMm = 0;
+                    outReport->distanceCm = 0;
                 }
                 return 0;
             }
-        } else {
-            k_msleep(2);
         }
+
+        const int64_t remainingMs = deadline - k_uptime_get();
+        if (remainingMs <= 0) {
+            break;
+        }
+        k_sem_take(&mRxSem, K_MSEC(remainingMs));
     }
 
-    // Fallback when OT2 is HIGH between 1 Hz UART reports: report occupied with last known distance
-    outReport->state          = Ld2410sTargetState::Stationary;
-    outReport->occupied       = true;
-    outReport->motion         = false;
-    outReport->distanceMm     = mLastDistanceMm;
-    outReport->distanceCm     = static_cast<uint16_t>(mLastDistanceMm / 10u);
-    outReport->isMinimalFrame = true;
+    // Fallback if no UART report frame arrived within timeoutMs: use hardware OT2 pin state
+    if (pinOccupied) {
+        outReport->state          = Ld2410sTargetState::Stationary;
+        outReport->occupied       = true;
+        outReport->motion         = false;
+        outReport->distanceMm     = mLastDistanceMm;
+        outReport->distanceCm     = static_cast<uint16_t>(mLastDistanceMm / 10u);
+        outReport->isMinimalFrame = true;
+    } else {
+        mLastDistanceMm           = 0;
+        outReport->state          = Ld2410sTargetState::Unoccupied;
+        outReport->occupied       = false;
+        outReport->motion         = false;
+        outReport->distanceMm     = 0;
+        outReport->distanceCm     = 0;
+        outReport->isMinimalFrame = true;
+    }
     return 0;
 }

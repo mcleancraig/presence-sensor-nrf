@@ -37,6 +37,51 @@ static uint16_t CmToMmClamped(uint16_t distanceCm, bool occupied)
     return mm > 65535u ? static_cast<uint16_t>(65535u) : static_cast<uint16_t>(mm);
 }
 
+static void PopulateReportFromRaw(uint8_t rawState,
+                                  uint16_t distCm,
+                                  bool isMinimalFrame,
+                                  Ld2410sParsedFrame *outFrame)
+{
+    Ld2410sTargetState state = Ld2410sTargetState::NoTarget;
+    bool occupied            = false;
+    bool motion              = false;
+
+    if (rawState == 0x00u) {
+        state    = Ld2410sTargetState::NoTarget;
+        occupied = false;
+        motion   = false;
+    } else if (rawState == 0x01u) {
+        // Across HLK-LD2410S firmware revisions:
+        //   - 0x01 with distanceCm == 0 means Unoccupied ("no body")
+        //   - 0x01 with distanceCm > 0 means Moving target
+        if (distCm == 0u) {
+            state    = Ld2410sTargetState::Unoccupied;
+            occupied = false;
+            motion   = false;
+        } else {
+            state    = Ld2410sTargetState::Moving;
+            occupied = true;
+            motion   = true;
+        }
+    } else if (rawState == 0x02u) {
+        state    = Ld2410sTargetState::Moving;
+        occupied = true;
+        motion   = true;
+    } else {
+        state    = Ld2410sTargetState::Stationary;
+        occupied = true;
+        motion   = false;
+    }
+
+    outFrame->type                  = Ld2410sFrameType::Report;
+    outFrame->report.state          = state;
+    outFrame->report.occupied       = occupied;
+    outFrame->report.motion         = motion;
+    outFrame->report.distanceCm     = distCm;
+    outFrame->report.distanceMm     = CmToMmClamped(distCm, occupied);
+    outFrame->report.isMinimalFrame = isMinimalFrame;
+}
+
 size_t BuildEnterConfigCmd(uint8_t *outBuf, size_t maxLen)
 {
     if (!outBuf || maxLen < kEnterConfigFrameSize) {
@@ -168,20 +213,10 @@ bool Ld2410sFrameParser::TryParseBuffer(Ld2410sParsedFrame *outFrame)
             }
             if (mBuf[4] == kMinimalFooter &&
                 mBuf[1] <= static_cast<uint8_t>(Ld2410sTargetState::Stationary)) {
-                const auto state = static_cast<Ld2410sTargetState>(mBuf[1]);
-                const bool occupied = (state == Ld2410sTargetState::Moving ||
-                                       state == Ld2410sTargetState::Stationary);
-                const bool motion = (state == Ld2410sTargetState::Moving);
-                const uint16_t distCm = ReadU16Le(&mBuf[2]);
+                const uint8_t rawState = mBuf[1];
+                const uint16_t distCm  = ReadU16Le(&mBuf[2]);
 
-                outFrame->type                  = Ld2410sFrameType::Report;
-                outFrame->report.state          = state;
-                outFrame->report.occupied       = occupied;
-                outFrame->report.motion         = motion;
-                outFrame->report.distanceCm     = distCm;
-                outFrame->report.distanceMm     = CmToMmClamped(distCm, occupied);
-                outFrame->report.isMinimalFrame = true;
-
+                PopulateReportFromRaw(rawState, distCm, true, outFrame);
                 DiscardPrefix(kMinimalFrameSize);
                 return true;
             }
@@ -191,7 +226,7 @@ bool Ld2410sFrameParser::TryParseBuffer(Ld2410sParsedFrame *outFrame)
             continue;
         }
 
-        // 2. Standard Report Frame: F4 F3 F2 F1 [len_lo] [len_hi] [type] [state] [dist_lo] [dist_hi] ... F8 F7 F6 F5
+        // 2. Standard Report Frame: F4 F3 F2 F1 [len_lo] [len_hi] ... F8 F7 F6 F5
         if (first == kStdReportHeader[0]) {
             const size_t prefixCheck = mLen < 4 ? mLen : 4;
             bool headerMatch = true;
@@ -209,7 +244,7 @@ bool Ld2410sFrameParser::TryParseBuffer(Ld2410sParsedFrame *outFrame)
                 return false;
             }
             const uint16_t payloadLen = ReadU16Le(&mBuf[4]);
-            if (payloadLen < 4u || payloadLen > 64u) {
+            if (payloadLen < 3u || payloadLen > kMaxPayloadSize) {
                 DiscardPrefix(1);
                 continue;
             }
@@ -217,25 +252,29 @@ bool Ld2410sFrameParser::TryParseBuffer(Ld2410sParsedFrame *outFrame)
             if (mLen < totalFrameLen) {
                 return false;
             }
-            if (memcmp(&mBuf[totalFrameLen - 4], kStdReportFooter, 4) == 0 &&
-                (mBuf[6] == 0x01u || mBuf[6] == 0x02u) &&
-                mBuf[7] <= static_cast<uint8_t>(Ld2410sTargetState::Stationary)) {
-                const auto state = static_cast<Ld2410sTargetState>(mBuf[7]);
-                const bool occupied = (state == Ld2410sTargetState::Moving ||
-                                       state == Ld2410sTargetState::Stationary);
-                const bool motion = (state == Ld2410sTargetState::Moving);
-                const uint16_t distCm = ReadU16Le(&mBuf[8]);
+            if (memcmp(&mBuf[totalFrameLen - 4], kStdReportFooter, 4) == 0) {
+                // Layout A: [type=0x01/0x02] [state] [dist_lo] [dist_hi] ... (e.g. 70-byte or 8-byte payload)
+                if (payloadLen >= 4u &&
+                    payloadLen != 3u &&
+                    payloadLen != 69u &&
+                    (mBuf[6] == 0x01u || mBuf[6] == 0x02u) &&
+                    mBuf[7] <= static_cast<uint8_t>(Ld2410sTargetState::Stationary)) {
+                    const uint8_t rawState = mBuf[7];
+                    const uint16_t distCm  = ReadU16Le(&mBuf[8]);
 
-                outFrame->type                  = Ld2410sFrameType::Report;
-                outFrame->report.state          = state;
-                outFrame->report.occupied       = occupied;
-                outFrame->report.motion         = motion;
-                outFrame->report.distanceCm     = distCm;
-                outFrame->report.distanceMm     = CmToMmClamped(distCm, occupied);
-                outFrame->report.isMinimalFrame = false;
+                    PopulateReportFromRaw(rawState, distCm, false, outFrame);
+                    DiscardPrefix(totalFrameLen);
+                    return true;
+                }
+                // Layout B: [state] [dist_lo] [dist_hi] ... (e.g. 3-byte or 69-byte payload without type prefix)
+                if (mBuf[6] <= static_cast<uint8_t>(Ld2410sTargetState::Stationary)) {
+                    const uint8_t rawState = mBuf[6];
+                    const uint16_t distCm  = ReadU16Le(&mBuf[7]);
 
-                DiscardPrefix(totalFrameLen);
-                return true;
+                    PopulateReportFromRaw(rawState, distCm, false, outFrame);
+                    DiscardPrefix(totalFrameLen);
+                    return true;
+                }
             }
 
             DiscardPrefix(1);
@@ -260,7 +299,7 @@ bool Ld2410sFrameParser::TryParseBuffer(Ld2410sParsedFrame *outFrame)
                 return false;
             }
             const uint16_t payloadLen = ReadU16Le(&mBuf[4]);
-            if (payloadLen < 4u || payloadLen > 64u) {
+            if (payloadLen < 4u || payloadLen > kMaxPayloadSize) {
                 DiscardPrefix(1);
                 continue;
             }

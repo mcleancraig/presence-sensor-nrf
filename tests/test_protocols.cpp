@@ -146,7 +146,7 @@ static void TestLd2410sParserMinimalAndEdgeCases()
     EXPECT_EQ(frame.report.distanceCm, 98u, "Distance 98 cm (0x62)");
     EXPECT_EQ(frame.report.distanceMm, 980u, "Distance 980 mm");
 
-    // 3. Unoccupied frame: 6E 00 50 00 62 -> occupied=false, motion=false, distanceMm=0
+    // 3. Unoccupied frame (0x00): 6E 00 50 00 62 -> occupied=false, motion=false, distanceMm=0
     const uint8_t clearFrame[5] = {0x6E, 0x00, 0x50, 0x00, 0x62};
     bool gotClear = false;
     for (uint8_t b : clearFrame) {
@@ -158,6 +158,31 @@ static void TestLd2410sParserMinimalAndEdgeCases()
     EXPECT_TRUE(!frame.report.occupied, "Unoccupied sets occupied=false");
     EXPECT_TRUE(!frame.report.motion, "Unoccupied sets motion=false");
     EXPECT_EQ(frame.report.distanceMm, 0u, "Unoccupied clamps distanceMm to 0");
+
+    // 4. HLK-LD2410S state=0x01 with distance=0 cm -> Unoccupied; with distance=120 cm -> Moving
+    const uint8_t clear01Frame[5] = {0x6E, 0x01, 0x00, 0x00, 0x62};
+    bool gotClear01 = false;
+    for (uint8_t b : clear01Frame) {
+        if (parser.PushByte(b, &frame)) {
+            gotClear01 = true;
+        }
+    }
+    EXPECT_TRUE(gotClear01, "State 0x01 with 0 cm decoded");
+    EXPECT_TRUE(!frame.report.occupied, "State 0x01 with 0 cm sets occupied=false");
+    EXPECT_TRUE(!frame.report.motion, "State 0x01 with 0 cm sets motion=false");
+    EXPECT_EQ(frame.report.distanceMm, 0u, "State 0x01 with 0 cm clamps distanceMm to 0");
+
+    const uint8_t moving01Frame[5] = {0x6E, 0x01, 0x78, 0x00, 0x62};
+    bool gotMoving01 = false;
+    for (uint8_t b : moving01Frame) {
+        if (parser.PushByte(b, &frame)) {
+            gotMoving01 = true;
+        }
+    }
+    EXPECT_TRUE(gotMoving01, "State 0x01 with 120 cm decoded");
+    EXPECT_TRUE(frame.report.occupied, "State 0x01 with 120 cm sets occupied=true");
+    EXPECT_TRUE(frame.report.motion, "State 0x01 with 120 cm sets motion=true");
+    EXPECT_EQ(frame.report.distanceMm, 1200u, "State 0x01 with 120 cm sets distanceMm=1200");
 }
 
 static void TestLd2410sParserStandardAndAckWithNoise()
@@ -206,6 +231,34 @@ static void TestLd2410sParserStandardAndAckWithNoise()
 
     EXPECT_EQ(ackCount, 1, "Decoded exactly 1 ACK frame across noisy stream");
     EXPECT_EQ(reportCount, 1, "Decoded exactly 1 Standard Report frame across noisy stream");
+
+    // Full 80-byte HLK-LD2410S Standard Output Frame (payloadLen = 70: 1B type + 1B state + 2B dist + 2B res + 64B gates)
+    uint8_t fullStdFrame[80] = {};
+    fullStdFrame[0] = 0xF4;
+    fullStdFrame[1] = 0xF3;
+    fullStdFrame[2] = 0xF2;
+    fullStdFrame[3] = 0xF1;
+    fullStdFrame[4] = 70u; // 0x46 payload length
+    fullStdFrame[5] = 0x00;
+    fullStdFrame[6] = 0x01; // Target report type
+    fullStdFrame[7] = 0x02; // Moving
+    fullStdFrame[8] = 135u; // 135 cm (1350 mm)
+    fullStdFrame[9] = 0x00;
+    fullStdFrame[76] = 0xF8;
+    fullStdFrame[77] = 0xF7;
+    fullStdFrame[78] = 0xF6;
+    fullStdFrame[79] = 0xF5;
+
+    bool gotFullStd = false;
+    for (uint8_t b : fullStdFrame) {
+        if (parser.PushByte(b, &frame)) {
+            gotFullStd = true;
+        }
+    }
+    EXPECT_TRUE(gotFullStd, "Decoded full 80-byte (70B payload) HLK-LD2410S standard frame");
+    EXPECT_TRUE(frame.report.occupied, "80-byte standard frame occupied=true");
+    EXPECT_TRUE(frame.report.motion, "80-byte standard frame motion=true");
+    EXPECT_EQ(frame.report.distanceMm, 1350u, "80-byte standard frame distanceMm=1350");
 }
 
 static void TestBthomeV2EncodingAndSpecCompliance()
@@ -231,7 +284,7 @@ static void TestBthomeV2EncodingAndSpecCompliance()
         0x01, 87u,              // Object 0x01: battery %
         0x0C, 0x91, 0x0F,       // Object 0x0C: voltage 3985 mV (LE)
         0x21, 0x01,             // Object 0x21: motion = 1
-        0x2D, 0x01,             // Object 0x2D: occupancy = 1
+        0x23, 0x01,             // Object 0x23: occupancy = 1
         0x40, 0x3C, 0x05        // Object 0x40: distance_mm 1340 mm (LE)
     };
     EXPECT_EQ(memcmp(svcData, expectedSvcData, sizeof(expectedSvcData)), 0, "BTHome exact byte layout");
@@ -245,7 +298,7 @@ static void TestBthomeV2EncodingAndSpecCompliance()
     // Verify negative tests: non-ascending Object IDs must be rejected by VerifyServiceData
     uint8_t badOrder[17];
     memcpy(badOrder, svcData, sizeof(badOrder));
-    badOrder[10] = 0x2Du; // Swap 0x21 and 0x2D so 0x2D comes before 0x21
+    badOrder[10] = 0x23u; // Swap 0x21 and 0x23 so 0x23 comes before 0x21
     badOrder[12] = 0x21u;
     EXPECT_TRUE(!BthomeProto::VerifyServiceData(badOrder, sizeof(badOrder)),
                 "Out-of-order Object IDs rejected");
