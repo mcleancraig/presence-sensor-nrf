@@ -45,8 +45,15 @@ This document records the hardware, bootloader, power-management, and protocol d
 
 ---
 
-## 3. Battery Sensing & Hardware Notes
+## 3. Battery Sensing, HLK-LD2410S Mechanical Footprint & Hardware Notes
 
+- **HLK-LD2410S Physical Footprint (`20.0 × 20.0 × 1.2 mm`) & `J2` Header (`2.54 mm` Pitch)**:
+  - The Hi-Link HLK-LD2410S is a **`20.0 × 20.0 × 1.2 mm` square PCB** (`±10%` thickness tolerance) with **`R = 2.0 mm` rounded corners** and zero mounting screw holes.
+  - Its 5-pin `J2` header (`Pin 1: 3V3`, `Pin 2: GND`, `Pin 3: OT1`, `Pin 4: RX`, `Pin 5: OT2`) uses a standard **`2.54 mm` (`0.100"`) pitch** (`10.16 mm` center-to-center span), with hole centers **`1.47 mm` inward from the `+X` PCB edge** and asymmetrically positioned from top (`+Y`) to bottom (`-Y`): `Pin 5 (OT2)` at `1.62 mm`, `Pin 4 (RX)` at `4.16 mm`, `Pin 3 (OT1)` at `6.70 mm`, `Pin 2 (GND)` at `9.24 mm`, and `Pin 1 (3V3)` at `11.78 mm` from the top `+Y` edge (`8.22 mm` from the bottom `-Y` edge).
+  - **Enclosure Orientation**:
+    - **Antenna side (`TOP层`) faces UP (`+Z`)**: The two diagonally opposite 24 GHz patch antennas and the `ICL1112` transceiver IC face upward (`+Z`) into the lid's **`22 × 22 × 1.2 mm`** blind RF radome window.
+    - **Component/header side (`Bottom层`) faces DOWN (`-Z`) with `J2` on `+X`**: The `PY32F030` MCU, `YXC` crystal, and `-Z` 5-pin `J2` header face downward (`-Z`) with **`19.5 mm`** of under-board vertical clearance, and the `J2` header edge faces **`+X` directly toward the SuperMini nRF52840** for short, unpinched wire routing.
+  - **Optional `10–47 µF` Decoupling Capacitor**: Because `Pin 1 (3V3)` and `Pin 2 (GND)` on `J2` are immediately adjacent (`2.54 mm` pitch), an optional `10–47 µF` decoupling capacitor can be soldered directly across Pins 1 and 2 on the `-Z` underside to smooth 24 GHz chirp current spikes.
 - **SAADC `VDDH/5`**: On the SuperMini nRF52840, the external voltage divider is misrouted to `P0.24` (a digital-only pin), so battery voltage is measured internally via `NRF_SAADC_VDDHDIV5` (`ADC_GAIN_1_2` = `1/2` gain, `0.6 V` internal reference = `1.2 V` full-scale = `6.0 V` at `VDDH`, 12-bit resolution, 16× hardware oversampling).
 - **USB Power Reading**: While USB-C is plugged in, `VDDH` reads `~4.8 V` (`100 %`). True cell voltage is measured only when running from the battery on `B+`/`B-`.
 - **No Reverse-Polarity Protection**: The SuperMini `B+`/`B-` pads have no reverse-polarity protection diode. Always verify battery polarity with a multimeter before inserting into the enclosure contacts.

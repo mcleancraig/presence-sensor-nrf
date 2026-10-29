@@ -11,25 +11,32 @@ Ultra-low-power 24 GHz mmWave Human Presence, Motion, Distance, and Battery Sens
 ## 1. Hardware Architecture
 
 - **Microcontroller**: SuperMini nRF52840 (pinout and Adafruit UF2 bootloader compatible with `nice!nano v2`).
-- **mmWave Radar**: Hi-Link **HLK-LD2410S** 24 GHz FMCW human presence & micro-motion radar (`3.0 V - 3.6 V` regulated rail, ~`58 - 100 µA` average current in low-speed 1 Hz sleep mode).
+- **mmWave Radar**: Hi-Link **HLK-LD2410S** 24 GHz FMCW human presence & micro-motion radar (`3.0 V - 3.6 V` regulated rail, ~`58 - 100 µA` average current in low-speed 1 Hz sleep mode; **`20.0 × 20.0 × 1.2 mm` square PCB** with `R = 2.0 mm` rounded corners and a **`2.54 mm` (`0.100"`) pitch 5-pin `J2` header**).
 - **Power Source**: Single Li-ion cell (`3.0 V - 4.2 V`) feeding the SuperMini `B+`/`B-` pads (`VDDH`).
-- **Continuous Radar Power (`P0.13` Switched VCC)**: Unlike one-shot I2C sensors, the HLK-LD2410S executes an internal 1 Hz / 8 Hz FMCW chirp state machine and maintains adaptive environmental noise baselines. Its `VCC` is powered from the SuperMini's switched `VCC` header pin (`P0.13` HIGH continuously during normal operation) so the onboard 3.3 V LDO regulates the raw cell voltage (`3.0 V - 4.2 V`) down to a clean `3.3 V` within the radar's `3.6 V` absolute maximum limit.
+- **Continuous Radar Power (`P0.13` Switched VCC)**: Unlike one-shot I2C sensors, the HLK-LD2410S executes an internal 1 Hz / 8 Hz FMCW chirp state machine and maintains adaptive environmental noise baselines. Its `3V3` input (`J2 Pin 1`) is powered from the SuperMini's switched `VCC` header pin (`P0.13` HIGH continuously during normal operation) so the onboard 3.3 V LDO regulates the raw cell voltage (`3.0 V - 4.2 V`) down to a clean `3.3 V` within the radar's `3.6 V` absolute maximum limit.
 - **Interrupt-Driven Wake & UARTE0 Runtime Suspend**:
   - `P0.17` (`017` / `D2`, `OT2` GPIO interrupt, `GPIO_INT_EDGE_BOTH`) wakes the nRF52840 from `< 3 µA` System ON Idle immediately when a person enters or leaves the bathroom.
   - `uart0` (`115200` baud, 8N1 on `P0.08` / `008` / `D0` RX and `P0.06` / `006` / `D1` TX) is suspended via `pm_device_action_run(uart_dev, PM_DEVICE_ACTION_SUSPEND)` whenever idle, releasing the nRF52840 64 MHz HFCLK and EasyDMA (~`500 µA` savings) and resuming only on `OT2` edges or periodic occupied distance refreshes (`15 s` via `CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC`).
 - **Low-Voltage Cutoff**: At `<= 3.0 V` (confirmed across 8 averaged readings over 2 s in `BatteryMonitor::ReadBatteryStatus()`), `P0.13` (`VCC`) is driven LOW to disconnect the HLK-LD2410S rail and the nRF52840 enters System OFF (`sys_poweroff()`).
 
-### Pinout & Wiring
+### Pinout, Header Geometry & Enclosure Orientation
 
-| HLK-LD2410S Pin (1.27 mm 5-pin) | SuperMini Silkscreen / Pin | nRF52840 Port.Pin | Direction | Function / Connection |
-| :--- | :--- | :--- | :--- | :--- |
-| **Pin 1: `VCC` (3.0–3.6 V)** | `VCC` (switched) | Controlled by `P0.13` | Power Out | Continuous regulated 3.3 V supply (`P0.13` held HIGH during run, LOW on `<= 3.0 V` cutoff) |
-| **Pin 2: `GND`** | `GND` | `GND` | Ground | Common ground with SuperMini and battery `B-` |
-| **Pin 3: `OT1` (UART TX)** | `008` (`D0`) | `P0.08` | Radar -> MCU | `uart0` RX (`115200` baud, 8N1; `low-power-enable` in sleep) |
-| **Pin 4: `RX` (UART RX)** | `006` (`D1`) | `P0.06` | MCU -> Radar | `uart0` TX (`115200` baud, 8N1; `low-power-enable` in sleep) |
-| **Pin 5: `OT2` (Status IO)** | `017` (`D2`) | `P0.17` | Radar -> MCU | Digital presence output (`HIGH` = occupied, `LOW` = clear; `GPIO_INT_EDGE_BOTH` wake) |
-| **Battery `+` / `-`** | `B+` / `B-` | `VDDH` / `GND` | Power In | Raw Li-ion cell (`3.0 V - 4.2 V`), measured internally via `NRF_SAADC_VDDHDIV5` (`1/2` gain) |
-| **Status LED** | On-board Red LED | `P0.15` | Internal | `500 ms` boot flash; dark thereafter in release builds |
+The HLK-LD2410S `J2` 5-pin header (`3V3`, `GND`, `OT1`, `RX`, `OT2`) uses a standard **`2.54 mm` (`0.100"`) pitch** and is asymmetrically positioned along the `+X` PCB edge (`Pin 5 OT2` at `1.62 mm` from the top `+Y` edge down to `Pin 1 3V3` at `11.78 mm` from the top `+Y` edge, with hole centers `1.47 mm` inward from the `+X` edge):
+
+| HLK-LD2410S `J2` Pin (`2.54 mm` 5-pin) | `Y_from_top` (`+Y` Edge) | SuperMini Silkscreen / Pin | nRF52840 Port.Pin | Direction | Function / Connection |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Pin 1: `3V3` (`3.0–3.6 V`)** | `11.78 mm` | `VCC` (switched) | Controlled by `P0.13` | Power Out | Continuous regulated 3.3 V supply (`P0.13` held HIGH during run, LOW on `<= 3.0 V` cutoff) |
+| **Pin 2: `GND`** | `9.24 mm` | `GND` | `GND` | Ground | Common ground with SuperMini and battery `B-` |
+| **Pin 3: `OT1` (UART TX)** | `6.70 mm` | `008` (`D0`) | `P0.08` | Radar -> MCU | `uart0` RX (`115200` baud, 8N1; `low-power-enable` in sleep) |
+| **Pin 4: `RX` (UART RX)** | `4.16 mm` | `006` (`D1`) | `P0.06` | MCU -> Radar | `uart0` TX (`115200` baud, 8N1; `low-power-enable` in sleep) |
+| **Pin 5: `OT2` (Status IO)** | `1.62 mm` | `017` (`D2`) | `P0.17` | Radar -> MCU | Digital presence output (`HIGH` = occupied, `LOW` = clear; `GPIO_INT_EDGE_BOTH` wake) |
+| **Battery `+` / `-`** | — | `B+` / `B-` | `VDDH` / `GND` | Power In | Raw Li-ion cell (`3.0 V - 4.2 V`), measured internally via `NRF_SAADC_VDDHDIV5` (`1/2` gain) |
+| **Status LED** | — | On-board Red LED | `P0.15` | Internal | `500 ms` boot flash; dark thereafter in release builds |
+
+- **Enclosure Orientation (`20.0 × 20.0 × 1.2 mm` PCB, `R = 2.0 mm` corners)**:
+  - **Antenna Side (`TOP层` -> `+Z` UP)**: The front face containing the two diagonally opposite 24 GHz patch antennas and `ICL1112` transceiver IC faces **UP (`+Z`)** directly toward the lid's **`22 × 22 × 1.2 mm`** blind RF radome window.
+  - **Component / Header Side (`Bottom层` -> `-Z` DOWN, `J2` -> `+X`)**: The underside containing the `PY32F030` MCU, `YXC` crystal, and `-Z` 5-pin `J2` header faces **DOWN (`-Z`)** with **`19.5 mm`** of under-board vertical clearance, and the `J2` 5-pin header edge faces **`+X` directly toward the SuperMini nRF52840** for short, unpinched cable routing.
+  - **Optional Decoupling Capacitor (`10–47 µF`)**: Because `Pin 1 (3V3)` and `Pin 2 (GND)` on `J2` are immediately adjacent (`2.54 mm` pitch), an optional `10–47 µF` capacitor can be soldered directly across Pins 1 and 2 on the `-Z` underside to smooth 24 GHz chirp current spikes.
 
 ---
 
