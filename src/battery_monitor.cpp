@@ -5,6 +5,7 @@
 
 #include "battery_monitor.h"
 #include <string.h>
+#include <hal/nrf_power.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
 #include <zephyr/sys/poweroff.h>
@@ -39,6 +40,7 @@ BatteryMonitor::BatteryMonitor()
     : mAdcDev(DEVICE_DT_GET_OR_NULL(DT_NODELABEL(adc))),
       mCutoffGpio(GPIO_DT_SPEC_GET_OR(ZEPHYR_USER_NODE, power_cutoff_gpios, {0})),
       mAdcBuffer(0),
+      mConsecutiveCutoffCount(0),
       mInitialized(false),
       mCutoffActive(false),
       mExternalPowerEnabled(false)
@@ -48,17 +50,17 @@ BatteryMonitor::BatteryMonitor()
 
 int BatteryMonitor::Init()
 {
-    // Step 1: Initialize Pin 13 (P0.13) Power Cutoff GPIO as ACTIVE HIGH.
-    // The HLK-LD2410S requires continuous 3.3V power to maintain its FMCW radar
-    // background clutter map and ultra-low-power (~0.1 mA) sleep state machine.
+    // Step 1: Initialize Pin 13 (P0.13) Power Cutoff GPIO as INACTIVE (LOW) initially.
+    // This allows the unloaded VDDH voltage to be measured and BLE advertising to start
+    // before enabling the HLK-LD2410S ~70 mA cold-boot inrush via SetSensorPower(true).
     if (mCutoffGpio.port != nullptr && device_is_ready(mCutoffGpio.port)) {
-        int ret = gpio_pin_configure_dt(&mCutoffGpio, GPIO_OUTPUT_ACTIVE);
+        int ret = gpio_pin_configure_dt(&mCutoffGpio, GPIO_OUTPUT_INACTIVE);
         if (ret != 0) {
             LOG_ERR("Failed to configure Pin 13 power cutoff GPIO (err: %d)", ret);
             return ret;
         }
-        mExternalPowerEnabled = true;
-        LOG_INF("External VCC rail enabled on Pin 13 (P0.13) for HLK-LD2410S");
+        mExternalPowerEnabled = false;
+        LOG_INF("External VCC rail (P0.13) initialized LOW prior to unloaded SAADC sample");
     } else {
         LOG_WRN("Pin 13 power cutoff GPIO not defined or not ready");
     }
@@ -88,6 +90,11 @@ int BatteryMonitor::Init()
     LOG_INF("Battery monitor initialized on AIN%d with external divider", CONFIG_APP_BATTERY_DIVIDER_AIN);
 #endif
     return 0;
+}
+
+bool BatteryMonitor::IsUsbVbusConnected() const
+{
+    return nrf_power_usbregstatus_vbusdet_get(NRF_POWER);
 }
 
 int BatteryMonitor::SetExternalPowerEnabled(bool enable)
@@ -163,8 +170,12 @@ int BatteryMonitor::ReadBatteryStatus(BatteryStatus *outStatus)
         return ret;
     }
 
-    // Confirm a low reading before acting on it: average several more samples
-    if (battMv <= VOLTAGE_CUTOFF_MV) {
+    const bool vbusConnected = IsUsbVbusConnected();
+
+    // Confirm a low reading before acting on it (only when running on battery;
+    // when USB-C is connected without a battery on B+, the TP4054 BAT node can
+    // droop under the HLK-LD2410S load and must not stall or trigger System OFF).
+    if (battMv <= VOLTAGE_CUTOFF_MV && !vbusConnected) {
         uint32_t sum = 0;
         int count = 0;
         for (int i = 0; i < CUTOFF_CONFIRM_SAMPLES; i++) {
@@ -193,18 +204,28 @@ int BatteryMonitor::ReadBatteryStatus(BatteryStatus *outStatus)
         LOG_WRN("Battery low: %u mV (%u%%)", battMv, outStatus->percentRemaining);
     } else {
         outStatus->chargeLevel = BatteryChargeLevel::Critical;
-        LOG_ERR("Battery CRITICAL: %u mV (%u%%)", battMv, outStatus->percentRemaining);
+        LOG_WRN("Battery/VDDH reading low: %u mV (%u%%, usb_vbus=%d)",
+                battMv, outStatus->percentRemaining, vbusConnected ? 1 : 0);
     }
 
-    // Check for hard over-discharge cutoff condition (<= 3000 mV)
-    if (battMv <= VOLTAGE_CUTOFF_MV && !mCutoffActive) {
-        LOG_ERR("CRITICAL UNDER-VOLTAGE (%u mV <= %u mV)! Activating VCC power cutoff to protect 18650 cell.",
-                battMv, VOLTAGE_CUTOFF_MV);
-        mCutoffActive = true;
-        EnterSystemOff();
+    // Check for hard over-discharge cutoff condition (<= 3000 mV) across consecutive status checks.
+    // Never enter System OFF when USB VBUS is connected (e.g. benchtop USB testing without a battery).
+    if (battMv <= VOLTAGE_CUTOFF_MV && !mCutoffActive && !vbusConnected) {
+        mConsecutiveCutoffCount++;
+        LOG_WRN("Under-voltage sample (%u mV <= %u mV), consecutive=%d/%d",
+                battMv, VOLTAGE_CUTOFF_MV, mConsecutiveCutoffCount, CUTOFF_CONSECUTIVE_READINGS);
+        if (mConsecutiveCutoffCount >= CUTOFF_CONSECUTIVE_READINGS) {
+            LOG_ERR("CRITICAL UNDER-VOLTAGE (%u mV <= %u mV)! Activating VCC power cutoff to protect 18650 cell.",
+                    battMv, VOLTAGE_CUTOFF_MV);
+            mCutoffActive = true;
+            EnterSystemOff();
+        }
+    } else {
+        mConsecutiveCutoffCount = 0;
     }
 
-    LOG_INF("Battery: %u mV, %u%%", battMv, outStatus->percentRemaining);
+    LOG_INF("Battery: %u mV, %u%% (usb_vbus=%d)",
+            battMv, outStatus->percentRemaining, vbusConnected ? 1 : 0);
 
     return 0;
 }

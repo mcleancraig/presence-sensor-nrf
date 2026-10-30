@@ -37,14 +37,16 @@ public:
     static constexpr uint16_t VOLTAGE_CUTOFF_MV    = 3000; // Hard cutoff threshold to prevent cell damage
 
     // A reading at or below the cutoff is confirmed by averaging this many
-    // further readings, spaced apart, so a radio-TX or radar sweep load dip
-    // cannot prematurely power the device off.
-    static constexpr int CUTOFF_CONFIRM_SAMPLES    = 8;
-    static constexpr int CUTOFF_CONFIRM_SPACING_MS = 250;
+    // further readings, spaced apart, and requiring consecutive low status
+    // checks so a radio-TX or radar startup inrush dip cannot power the device off.
+    static constexpr int CUTOFF_CONFIRM_SAMPLES      = 8;
+    static constexpr int CUTOFF_CONFIRM_SPACING_MS   = 250;
+    static constexpr int CUTOFF_CONSECUTIVE_READINGS = 2;
 
     /**
      * @brief Initialize SAADC channel and Pin 13 (P0.13) power cutoff GPIO.
-     *        Leaves P0.13 HIGH so the HLK-LD2410S receives continuous 3.3V power.
+     *        Configures P0.13 LOW initially so unloaded battery voltage and BLE
+     *        advertising can initialize before enabling the HLK-LD2410S rail.
      */
     int Init();
 
@@ -55,9 +57,19 @@ public:
     int SetExternalPowerEnabled(bool enable);
 
     /**
+     * @brief Alias for SetExternalPowerEnabled() to control HLK-LD2410S 3.3V power.
+     */
+    int SetSensorPower(bool enable) { return SetExternalPowerEnabled(enable); }
+
+    /**
      * @brief Query whether external VCC rail switch is currently enabled.
      */
     bool IsExternalPowerEnabled() const { return mExternalPowerEnabled; }
+
+    /**
+     * @brief Query whether USB VBUS (5V) is currently connected.
+     */
+    bool IsUsbVbusConnected() const;
 
     /**
      * @brief Read the battery voltage, compute percentage and check cutoff protection.
@@ -86,6 +98,7 @@ private:
     struct gpio_dt_spec mCutoffGpio;
     struct adc_channel_cfg mChannelCfg;
     int16_t mAdcBuffer;
+    int mConsecutiveCutoffCount;
     bool mInitialized;
     bool mCutoffActive;
     bool mExternalPowerEnabled;

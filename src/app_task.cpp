@@ -128,35 +128,38 @@ int AppTask::Start()
     k_timer_init(&mOccupiedPollTimer, OnOccupiedPollTimer, nullptr);
     k_timer_init(&mBatteryTimer, OnBatteryTimer, nullptr);
 
-    // 1. Initialize Battery Monitor (enables P0.13 VCC rail for HLK-LD2410S and configures SAADC VDDH/5)
+    // 1. Initialize Battery Monitor with P0.13 LOW (radar unpowered) and configure SAADC VDDH/5
     int ret = BatteryMonitor::Instance().Init();
     if (ret != 0) {
         LOG_ERR("BatteryMonitor::Init failed (err: %d)", ret);
         StatusLed::Instance().BlinkError(2);
     }
 
-    // Read initial battery voltage (cuts power & enters System OFF immediately if cell <= 3000 mV)
+    // Read initial unloaded battery/VBUS voltage before enabling the radar 3.3 V rail
     SampleBattery();
 
-    // 2. Initialize HLK-LD2410S (P0.17 OT2 interrupt + uart0 3 m^3 bathroom config + suspend uart0)
-    ret = mRadar.Init(OnOt2EdgeStatic);
-    if (ret != 0) {
-        LOG_ERR("SensorLd2410s::Init failed (err: %d)", ret);
-        StatusLed::Instance().BlinkError(3);
-    }
-
-    // 3. Initialize BTHome v2 BLE Advertiser
+    // 2. Initialize BTHome v2 BLE Advertiser and broadcast initial state immediately
+    // before enabling the HLK-LD2410S 3.3 V load (guarantees BLE discovery even on USB-only power)
     ret = mAdvertiser.Init();
     if (ret != 0) {
         LOG_ERR("BthomeAdvertiser::Init failed (err: %d)", ret);
         StatusLed::Instance().BlinkError(4);
         return ret;
     }
+    PublishCurrentState(true);
+
+    // 3. Enable P0.13 3.3 V VCC rail and initialize HLK-LD2410S (P0.17 OT2 + uart0 config + auto pin-swap probe)
+    (void)BatteryMonitor::Instance().SetSensorPower(true);
+    ret = mRadar.Init(OnOt2EdgeStatic);
+    if (ret != 0) {
+        LOG_ERR("SensorLd2410s::Init failed (err: %d)", ret);
+        StatusLed::Instance().BlinkError(3);
+    }
 
     // Ensure P0.15 status LED is strictly OFF before entering the low-power event loop
     StatusLed::Instance().Set(false);
 
-    // 4. Perform initial radar sample and broadcast initial burst advertisement
+    // 4. Perform initial radar sample and broadcast updated burst advertisement
     HandleOt2AndDistanceUpdate(true, true);
 
     // 5. Start periodic low-power timers (5 s radar UART poll + 60 s heartbeat + 6 h battery)

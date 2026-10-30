@@ -20,9 +20,14 @@ public:
     static constexpr uint32_t kDefaultSampleTimeoutMs = 1150;
     static constexpr uint32_t kAckTimeoutMs           = 500;
     static constexpr uint32_t kRadarBootSettleMs      = 1000;
+    static constexpr uint32_t kPinSwapProbeSettleMs   = 500;
     static constexpr uint32_t kInterCommandDelayMs    = 50;
     static constexpr int      kConfigMaxRetries       = 5;
     static constexpr size_t   kRxRingSize             = 256;
+    static constexpr uint32_t kUartDefaultRxPin       = 8u; // P0.08 <- HLK-LD2410S OT1 (TX)
+    static constexpr uint32_t kUartDefaultTxPin       = 6u; // P0.06 -> HLK-LD2410S RX
+    static constexpr uint32_t kUartAltRxPin           = 6u; // P0.06 (auto-fallback if RX/TX swapped)
+    static constexpr uint32_t kUartAltTxPin           = 8u; // P0.08 (auto-fallback if RX/TX swapped)
 
     SensorLd2410s();
 
@@ -59,6 +64,8 @@ private:
 
     int ResumeUart();
     int SuspendUart();
+    void ApplyUartPinMapping(bool swapPins);
+    void ParseBufferedBootReports();
     bool PopRxByte(uint8_t *outByte);
     void DrainUartRx();
     void SendBytes(const uint8_t *data, size_t len);
@@ -70,11 +77,15 @@ private:
     struct gpio_callback    mOt2CbData;
     Ot2EdgeCallback         mEdgeCallback;
     Ld2410sFrameParser      mParser;
+    Ld2410sReport           mLastBootReport;
     struct k_sem            mRxSem;
     uint8_t                 mRxRing[kRxRingSize];
     volatile uint32_t       mRxHead;
     volatile uint32_t       mRxTail;
+    volatile uint32_t       mRxBytesSeen;
     uint16_t                mLastDistanceMm;
+    bool                    mHasBootReport;
+    bool                    mSwapRxTxPins;
     bool                    mUartSuspended;
     bool                    mRadarConfigured;
 };

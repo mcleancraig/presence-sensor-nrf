@@ -7,6 +7,8 @@
 #include <zephyr/drivers/uart.h>
 #include <zephyr/pm/device.h>
 #include <zephyr/logging/log.h>
+#include <hal/nrf_gpio.h>
+#include <hal/nrf_uarte.h>
 
 LOG_MODULE_REGISTER(sensor_ld2410s, LOG_LEVEL_INF);
 
@@ -47,10 +49,14 @@ SensorLd2410s::SensorLd2410s()
     : mUartDev(DEVICE_DT_GET_OR_NULL(DT_NODELABEL(uart0))),
       mOt2Gpio(GPIO_DT_SPEC_GET_OR(ZEPHYR_USER_NODE, presence_ot2_gpios, {0})),
       mEdgeCallback(nullptr),
+      mLastBootReport{Ld2410sTargetState::Unoccupied, false, false, 0, 0, true},
       mRxRing{},
       mRxHead(0),
       mRxTail(0),
+      mRxBytesSeen(0),
       mLastDistanceMm(0),
+      mHasBootReport(false),
+      mSwapRxTxPins(false),
       mUartSuspended(false),
       mRadarConfigured(false)
 {
@@ -74,10 +80,12 @@ void SensorLd2410s::OnUartIsr(const struct device *dev, void *userData)
     }
 
     while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
+        (void)uart_err_check(dev);
         if (uart_irq_rx_ready(dev)) {
             uint8_t buf[32];
             int recvLen = uart_fifo_read(dev, buf, sizeof(buf));
             if (recvLen > 0) {
+                self->mRxBytesSeen = self->mRxBytesSeen + static_cast<uint32_t>(recvLen);
                 for (int i = 0; i < recvLen; ++i) {
                     const uint32_t head     = self->mRxHead;
                     const uint32_t nextHead = (head + 1u) % kRxRingSize;
@@ -103,6 +111,65 @@ bool SensorLd2410s::PopRxByte(uint8_t *outByte)
     return true;
 }
 
+void SensorLd2410s::ApplyUartPinMapping(bool swapPins)
+{
+    mSwapRxTxPins = swapPins;
+    const uint32_t rxPin = swapPins ? kUartAltRxPin : kUartDefaultRxPin;
+    const uint32_t txPin = swapPins ? kUartAltTxPin : kUartDefaultTxPin;
+
+    if (mUartDev) {
+        uart_irq_rx_disable(mUartDev);
+        uart_irq_err_disable(mUartDev);
+    }
+
+    nrf_uarte_task_trigger(NRF_UARTE0, NRF_UARTE_TASK_STOPRX);
+    k_busy_wait(100);
+    nrf_uarte_disable(NRF_UARTE0);
+
+    nrf_gpio_pin_set(txPin);
+    nrf_gpio_cfg(txPin,
+                 NRF_GPIO_PIN_DIR_OUTPUT,
+                 NRF_GPIO_PIN_INPUT_DISCONNECT,
+                 NRF_GPIO_PIN_NOPULL,
+                 NRF_GPIO_PIN_S0S1,
+                 NRF_GPIO_PIN_NOSENSE);
+    nrf_gpio_cfg(rxPin,
+                 NRF_GPIO_PIN_DIR_INPUT,
+                 NRF_GPIO_PIN_INPUT_CONNECT,
+                 NRF_GPIO_PIN_PULLUP,
+                 NRF_GPIO_PIN_S0S1,
+                 NRF_GPIO_PIN_NOSENSE);
+
+    nrf_uarte_txrx_pins_set(NRF_UARTE0, txPin, rxPin);
+    nrf_uarte_enable(NRF_UARTE0);
+    nrf_uarte_event_clear(NRF_UARTE0, NRF_UARTE_EVENT_ERROR);
+    nrf_uarte_event_clear(NRF_UARTE0, NRF_UARTE_EVENT_ENDRX);
+    nrf_uarte_event_clear(NRF_UARTE0, NRF_UARTE_EVENT_RXTO);
+    nrf_uarte_event_clear(NRF_UARTE0, NRF_UARTE_EVENT_RXSTARTED);
+    nrf_uarte_task_trigger(NRF_UARTE0, NRF_UARTE_TASK_STARTRX);
+
+    if (mUartDev) {
+        uart_irq_err_enable(mUartDev);
+        uart_irq_rx_enable(mUartDev);
+    }
+    DrainUartRx();
+}
+
+void SensorLd2410s::ParseBufferedBootReports()
+{
+    uint8_t rxByte = 0;
+    while (PopRxByte(&rxByte)) {
+        Ld2410sParsedFrame frame{};
+        if (mParser.PushByte(rxByte, &frame) && frame.type == Ld2410sFrameType::Report) {
+            mLastBootReport = frame.report;
+            mHasBootReport  = true;
+            if (frame.report.occupied && frame.report.distanceMm > 0) {
+                mLastDistanceMm = frame.report.distanceMm;
+            }
+        }
+    }
+}
+
 int SensorLd2410s::ResumeUart()
 {
     if (!mUartDev || !device_is_ready(mUartDev)) {
@@ -116,7 +183,16 @@ int SensorLd2410s::ResumeUart()
         }
         mUartSuspended = false;
         k_busy_wait(200);
+        if (mSwapRxTxPins) {
+            ApplyUartPinMapping(true);
+            return 0;
+        }
     }
+    nrf_uarte_enable(NRF_UARTE0);
+    if (!nrf_uarte_event_check(NRF_UARTE0, NRF_UARTE_EVENT_RXSTARTED)) {
+        nrf_uarte_task_trigger(NRF_UARTE0, NRF_UARTE_TASK_STARTRX);
+    }
+    uart_irq_err_enable(mUartDev);
     uart_irq_rx_enable(mUartDev);
     return 0;
 }
@@ -127,6 +203,7 @@ int SensorLd2410s::SuspendUart()
         return -ENODEV;
     }
     uart_irq_rx_disable(mUartDev);
+    uart_irq_err_disable(mUartDev);
     if (mUartSuspended) {
         return 0;
     }
@@ -305,9 +382,31 @@ int SensorLd2410s::Init(Ot2EdgeCallback edgeCb)
 
     LOG_INF("HLK-LD2410S OT2 interrupt armed on P0.%02d (GPIO_INT_EDGE_BOTH)", mOt2Gpio.pin);
 
-    // Allow HLK-LD2410S internal PY32F030 MCU + ICL1112 MMIC to complete boot after P0.13 VCC power-on
+    // Enable UART0 RX before the 1000 ms boot settle window so any boot stream frames
+    // emitted by the HLK-LD2410S (PY32F030 MCU + ICL1112 MMIC) are captured in mRxRing.
+    ResumeUart();
     k_msleep(kRadarBootSettleMs);
+
+    LOG_INF("HLK-LD2410S boot settle complete (rx_bytes=%u on RX=P0.08, TX=P0.06)", mRxBytesSeen);
+    ParseBufferedBootReports();
+
     ConfigureRadarParameters();
+
+    // If no valid report frame arrived on the default pin mapping (RX=P0.08, TX=P0.06) and
+    // configuration did not ACK, automatically probe swapped pins (RX=P0.06, TX=P0.08).
+    if (!mHasBootReport && !mRadarConfigured) {
+        LOG_WRN("No valid frame/ACK on default UART pins (RX=P0.08, TX=P0.06, rx_bytes=%u); probing swapped pins (RX=P0.06, TX=P0.08)",
+                mRxBytesSeen);
+        ApplyUartPinMapping(true);
+        k_msleep(kPinSwapProbeSettleMs);
+        ParseBufferedBootReports();
+        if (ConfigureRadarParameters() == 0 || mHasBootReport) {
+            LOG_INF("HLK-LD2410S active on swapped UART pins (RX=P0.06, TX=P0.08, rx_bytes=%u)", mRxBytesSeen);
+        } else {
+            LOG_WRN("No response on swapped UART pins; restoring default mapping (RX=P0.08, TX=P0.06)");
+            ApplyUartPinMapping(false);
+        }
+    }
 
     // Ensure uart0 is suspended after boot configuration even if ScopedUartWake
     // started with mUartSuspended == false.
@@ -332,12 +431,14 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
 
     const bool pinOccupied = ReadPinOccupancy();
 
+    // Flush stale ring-buffer bytes BEFORE waking UART0 so no incoming byte
+    // received immediately after ResumeUart() is discarded.
+    DrainUartRx();
+
     // Briefly resume uart0 and enable RX interrupt to capture one report frame from the radar
     auto resumeCb = [](void *ctx) -> int { return static_cast<SensorLd2410s *>(ctx)->ResumeUart(); };
     auto suspendCb = [](void *ctx) -> int { return static_cast<SensorLd2410s *>(ctx)->SuspendUart(); };
     ScopedUartWake uartWake(resumeCb, suspendCb, this);
-
-    DrainUartRx();
 
     const int64_t deadline = k_uptime_get() + static_cast<int64_t>(timeoutMs);
     while (true) {
@@ -345,6 +446,7 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
         while (PopRxByte(&rxByte)) {
             Ld2410sParsedFrame frame{};
             if (mParser.PushByte(rxByte, &frame) && frame.type == Ld2410sFrameType::Report) {
+                mHasBootReport = false;
                 *outReport = frame.report;
                 if (pinOccupied && !outReport->occupied) {
                     outReport->occupied = true;
@@ -370,6 +472,16 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
             break;
         }
         k_sem_take(&mRxSem, K_MSEC(remainingMs));
+    }
+
+    // If a valid report was already captured during the boot settle window, use it
+    if (mHasBootReport) {
+        mHasBootReport = false;
+        *outReport     = mLastBootReport;
+        if (pinOccupied && !outReport->occupied) {
+            outReport->occupied = true;
+        }
+        return 0;
     }
 
     // Fallback if no UART report frame arrived within timeoutMs: use hardware OT2 pin state
