@@ -332,8 +332,7 @@ static void TestLd2410sMotionTrackerKinematics()
     Ld2410sMotionTracker tracker;
 
     // 1. Entry with Minimal 5-Byte 0x02 frame at t = 1000 ms (700 mm):
-    // Even though Minimal mode emits 0x02 (Stationary), entering an unoccupied room
-    // must synthesize motion = true and state = Moving.
+    // Entering an unoccupied room always synthesizes motion = true and state = Moving.
     Ld2410sReport r1 = {
         .state          = Ld2410sTargetState::Stationary,
         .occupied       = true,
@@ -349,7 +348,7 @@ static void TestLd2410sMotionTrackerKinematics()
               "Entry frame upgrades state to Moving");
     EXPECT_EQ(tracker.GetAnchorDistanceMm(), 700u, "Entry frame anchors at 700 mm");
 
-    // 2. Stillness within 5.0 s hold window (t = 4500 ms, elapsed = 3500 ms < 5000 ms, 740 mm -> +40 mm < 100 mm):
+    // 2. Sub-100 mm jitter within 5.0 s hold window (t = 4500 ms, elapsed = 3500 ms < 5000 ms, 740 mm -> +40 mm < 100 mm):
     Ld2410sReport r2 = r1;
     r2.state      = Ld2410sTargetState::Stationary;
     r2.motion     = false;
@@ -372,21 +371,23 @@ static void TestLd2410sMotionTrackerKinematics()
     EXPECT_EQ(tracker.GetLastMotionTimestampMs(), 4800, "Radial walk updates motion timestamp to 4800 ms");
 
     // 4. Stillness for >= 5000 ms after last movement (t = 9800 ms, elapsed = 5000 ms at 1150 mm -> -50 mm < 100 mm):
-    // Must transition cleanly to motion = false (Stationary) while occupied stays true!
+    // Must transition cleanly to motion = false (Stationary) for BOTH 0x02 and 0x03 raw states!
     Ld2410sReport r4 = r3;
-    r4.state      = Ld2410sTargetState::Stationary;
-    r4.motion     = false;
+    r4.state      = Ld2410sTargetState::Moving; // Even if raw state is 0x03, < 100 mm delta must decay!
+    r4.motion     = true;
     r4.distanceCm = 115u;
     r4.distanceMm = 1150u;
     tracker.Update(&r4, 9800);
     EXPECT_TRUE(r4.occupied, "After 5s stillness occupied stays true");
-    EXPECT_TRUE(!r4.motion, "After 5s stillness motion transitions to false (Clear)");
+    EXPECT_TRUE(!r4.motion, "After 5s stillness motion transitions to false (Clear) for both 0x02 and 0x03");
     EXPECT_EQ(static_cast<uint8_t>(r4.state), static_cast<uint8_t>(Ld2410sTargetState::Stationary),
-              "After 5s stillness state is Stationary (0x02)");
+              "After 5s stillness state downgrades to Stationary (0x02)");
 
     // 5. Subsequent movement while occupied (t = 12000 ms, 1150 mm -> 350 mm, delta = 850 mm >= 100 mm):
     // Must re-trigger motion = true!
     Ld2410sReport r5 = r4;
+    r5.state      = Ld2410sTargetState::Stationary;
+    r5.motion     = false;
     r5.distanceCm = 35u;
     r5.distanceMm = 350u;
     tracker.Update(&r5, 12000);
@@ -394,20 +395,21 @@ static void TestLd2410sMotionTrackerKinematics()
     EXPECT_TRUE(r5.motion, "Re-triggered movement >= 100 mm sets motion=true");
     EXPECT_EQ(tracker.GetAnchorDistanceMm(), 350u, "Re-triggered movement updates anchor to 350 mm");
 
-    // 6. Departure at t = 14000 ms: immediately clears motion, occupied, and anchor:
-    Ld2410sReport r6 = {
-        .state          = Ld2410sTargetState::Unoccupied,
-        .occupied       = false,
-        .motion         = false,
-        .distanceCm     = 0u,
-        .distanceMm     = 0u,
+    // 6. Out-of-bounds reflection beyond 3 m^3 bathroom max distance (3450 mm > 2100 mm at t = 13000 ms):
+    // Must clamp to Unoccupied (occupied = false, motion = false, distanceMm = 0) and reset tracker!
+    Ld2410sReport rFar = {
+        .state          = Ld2410sTargetState::Moving,
+        .occupied       = true,
+        .motion         = true,
+        .distanceCm     = 345u,
+        .distanceMm     = 3450u,
         .isMinimalFrame = true,
     };
-    tracker.Update(&r6, 14000);
-    EXPECT_TRUE(!r6.occupied, "Departure occupied=false");
-    EXPECT_TRUE(!r6.motion, "Departure motion=false");
-    EXPECT_EQ(r6.distanceMm, 0u, "Departure distanceMm=0");
-    EXPECT_EQ(tracker.GetAnchorDistanceMm(), 0u, "Departure resets motion anchor to 0");
+    tracker.Update(&rFar, 13000);
+    EXPECT_TRUE(!rFar.occupied, "Out-of-bounds (>2100 mm) clamps occupied=false");
+    EXPECT_TRUE(!rFar.motion, "Out-of-bounds (>2100 mm) clamps motion=false");
+    EXPECT_EQ(rFar.distanceMm, 0u, "Out-of-bounds (>2100 mm) clamps distanceMm=0");
+    EXPECT_EQ(tracker.GetAnchorDistanceMm(), 0u, "Out-of-bounds (>2100 mm) resets motion anchor to 0");
 
     // 7. 5-wire OT2 rising-edge fast-path followed 62 ms later by Minimal 0x02 sample:
     tracker.NotifyEntryEdge(20000);
@@ -415,14 +417,14 @@ static void TestLd2410sMotionTrackerKinematics()
         .state          = Ld2410sTargetState::Stationary,
         .occupied       = true,
         .motion         = false,
-        .distanceCm     = 110u,
-        .distanceMm     = 1100u,
+        .distanceCm     = 140u,
+        .distanceMm     = 1400u,
         .isMinimalFrame = true,
     };
     tracker.Update(&r7, 20062);
     EXPECT_TRUE(r7.occupied, "Post-OT2 Minimal 0x02 sample occupied=true");
-    EXPECT_TRUE(r7.motion, "Post-OT2 Minimal 0x02 sample preserves motion=true");
-    EXPECT_EQ(tracker.GetAnchorDistanceMm(), 1100u, "Post-OT2 sample anchors at 1100 mm");
+    EXPECT_TRUE(r7.motion, "Post-OT2 Minimal 0x02 sample preserves 5s entry motion=true");
+    EXPECT_EQ(tracker.GetAnchorDistanceMm(), 1400u, "Post-OT2 sample anchors at 1400 mm");
 }
 
 int main()

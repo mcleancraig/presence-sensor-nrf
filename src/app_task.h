@@ -56,6 +56,8 @@ private:
     struct k_timer     mHeartbeatTimer;
     struct k_timer     mOccupiedPollTimer;
     struct k_timer     mBatteryTimer;
+    int64_t            mLastStateChangeMs;
+    int64_t            mLastPublishMs;
     uint16_t           mLastPublishedDistanceMm;
     bool               mLastOccupied;
     bool               mLastMotion;

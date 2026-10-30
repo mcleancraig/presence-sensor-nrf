@@ -82,12 +82,15 @@ static constexpr uint32_t kOutputModeMinimal  = 0x00000000u;
 static constexpr uint32_t kOutputModeStandard = 0x00000001u;
 
 // Default parameter presets for a 3 m^3 bathroom (~1.5 x 1.5 x 2.2 m)
-static constexpr uint32_t kDefaultBathroomMaxGate     = 3u;  // 2.10 m
-static constexpr uint32_t kDefaultBathroomMinGate     = 0u;  // 0.00 m
-static constexpr uint32_t kDefaultBathroomHoldSec     = 30u; // 30 s
-static constexpr uint32_t kDefaultReportFreqTenthsHz  = 80u; // 8.0 Hz (125 ms frame interval)
-static constexpr uint32_t kDefaultResponseSpeedNormal = 5u;  // Normal
-static constexpr uint32_t kDefaultResponseSpeedFast   = 10u; // Fast (instant light-switch response)
+static constexpr uint32_t kDefaultBathroomMaxGate         = 3u;   // 2.10 m
+static constexpr uint32_t kDefaultBathroomMinGate         = 0u;   // 0.00 m
+static constexpr uint32_t kDefaultBathroomHoldSec         = 30u;  // 30 s
+static constexpr uint32_t kDefaultReportFreqTenthsHz      = 80u;  // 8.0 Hz (125 ms frame interval)
+static constexpr uint32_t kDefaultResponseSpeedNormal     = 5u;   // Normal
+static constexpr uint32_t kDefaultResponseSpeedFast       = 10u;  // Fast (instant light-switch response)
+static constexpr uint16_t kGateWidthMm                    = 700u; // 0.70 m per HLK-LD2410S range gate
+static constexpr uint16_t kDefaultMaxBathroomDistanceMm   =
+    static_cast<uint16_t>(kDefaultBathroomMaxGate * kGateWidthMm); // 2100 mm (Gate 3 boundary)
 
 // Exact serialized command frame sizes
 static constexpr size_t kEnterConfigFrameSize       = 14;
@@ -154,17 +157,17 @@ private:
 };
 
 /**
- * @brief Deterministic Radial-Kinematic + State Motion Classifier for HLK-LD2410S.
+ * @brief Deterministic Radial-Kinematic Motion Classifier & Boundary Gate for HLK-LD2410S.
  *
- * In Minimal 5-Byte output mode (6E [state] [dist_lo] [dist_hi] 62), the HLK-LD2410S
- * firmware emits 0x00/0x01 when unoccupied and 0x02 for all occupied frames (never
- * emitting 0x03 in Minimal mode). This tracker synthesizes accurate BTHome Motion
- * (0x21) alongside Occupancy (0x23) by combining:
- *   1. Occupancy entry edge (unoccupied -> occupied always triggers motion),
- *   2. Explicit 0x03 Moving state from Standard output frames, and
- *   3. Radial distance displacement >= 100 mm (10 cm) from the motion anchor,
- * holding motion=true for 5000 ms after the most recent movement before transitioning
- * cleanly to motion=false (Stationary) while occupied remains true.
+ * Synthesizes accurate BTHome Motion (0x21) alongside Occupancy (0x23) across both
+ * Minimal 5-Byte (0x02) and Standard (0x02/0x03) HLK-LD2410S report frames:
+ *   1. Clamps targets beyond maxValidDistanceMm (2100 mm for a 3 m^3 bathroom) to Unoccupied.
+ *   2. Triggers motion=true on unoccupied -> occupied entry or >= 100 mm radial movement
+ *      across all occupied frames (0x02 and 0x03).
+ *   3. Never allows raw state bytes (0x02 or 0x03) to bypass the 5000 ms stillness decay
+ *      timer when radial distance change is < 100 mm.
+ *   4. Holds motion=true for 5000 ms after the last >= 100 mm movement, then transitions
+ *      cleanly to motion=false (Clear / Stationary) while occupied stays true.
  */
 class Ld2410sMotionTracker {
 public:
@@ -181,11 +184,11 @@ public:
     void NotifyEntryEdge(int64_t nowMs);
 
     /**
-     * @brief Update report->motion and report->state in-place based on occupancy
-     *        transitions, explicit 0x03 state, radial distance kinematics, and
-     *        the 5.0 s stillness hold timer.
+     * @brief Update report->motion, report->occupied, and report->state in-place.
      */
-    void Update(Ld2410sReport *inoutReport, int64_t nowMs);
+    void Update(Ld2410sReport *inoutReport,
+                int64_t nowMs,
+                uint16_t maxValidDistanceMm = Ld2410sProto::kDefaultMaxBathroomDistanceMm);
 
     uint16_t GetAnchorDistanceMm() const { return mLastMotionAnchorDistMm; }
     int64_t GetLastMotionTimestampMs() const { return mLastMotionDetectedMs; }

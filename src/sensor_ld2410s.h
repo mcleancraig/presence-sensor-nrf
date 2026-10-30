@@ -18,9 +18,10 @@ public:
     // At 8.0 Hz (125 ms frame period), 220 ms spans ~1.75 frame intervals
     // (~62 ms average wake time) while returning and suspending uart0 immediately
     // upon receiving the first valid 5-byte report frame.
-    static constexpr uint32_t kDefaultSampleTimeoutMs  = 220;
-    static constexpr uint32_t kFallbackSampleTimeoutMs = 1150;
-    static constexpr uint32_t kAckTimeoutMs            = 500;
+    static constexpr uint32_t kDefaultSampleTimeoutMs     = 220;
+    static constexpr uint32_t kFallbackSampleTimeoutMs    = 1150;
+    static constexpr int64_t  kUartStaleReportTimeoutMs   = 2500;
+    static constexpr uint32_t kAckTimeoutMs               = 500;
     static constexpr uint32_t kRadarBootSettleMs      = 1000;
     static constexpr uint32_t kPinSwapProbeSettleMs   = 500;
     static constexpr uint32_t kInterCommandDelayMs    = 50;
@@ -85,14 +86,15 @@ private:
     struct gpio_callback    mOt2CbData;
     Ot2EdgeCallback         mEdgeCallback;
     Ld2410sFrameParser      mParser;
-    Ld2410sReport           mLastBootReport;
+    Ld2410sReport           mLastValidReport;
+    int64_t                 mLastUartReportMs;
     struct k_sem            mRxSem;
     uint8_t                 mRxRing[kRxRingSize];
     volatile uint32_t       mRxHead;
     volatile uint32_t       mRxTail;
     volatile uint32_t       mRxBytesSeen;
     uint16_t                mLastDistanceMm;
-    bool                    mHasBootReport;
+    bool                    mHasValidUartReport;
     bool                    mSwapRxTxPins;
     bool                    mUartSuspended;
     bool                    mRadarConfigured;

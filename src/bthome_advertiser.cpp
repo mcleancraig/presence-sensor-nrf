@@ -19,7 +19,8 @@ BthomeAdvertiser::BthomeAdvertiser()
     : mIdentityId(BT_ID_DEFAULT),
       mPacketId(0),
       mAdvertising(false),
-      mInBurstMode(false)
+      mInBurstMode(false),
+      mIsOccupiedOrActive(false)
 {
     memset(mSvcData, 0, sizeof(mSvcData));
     memcpy(mDeviceName, "Presence-0000", sizeof("Presence-0000"));
@@ -117,7 +118,8 @@ int BthomeAdvertiser::ApplyAdvertisingParams(uint16_t intervalMinUnits, uint16_t
 int BthomeAdvertiser::Publish(const BthomeMeasurement &m, bool burst)
 {
     BthomeMeasurement encoded = m;
-    encoded.packetId = ++mPacketId;
+    encoded.packetId    = ++mPacketId;
+    mIsOccupiedOrActive = encoded.occupancy || encoded.motion;
 
     BthomeProto::EncodeServiceData(encoded, mSvcData, sizeof(mSvcData));
 
@@ -145,17 +147,20 @@ int BthomeAdvertiser::Publish(const BthomeMeasurement &m, bool burst)
         return ret;
     }
 
+    const uint16_t steadyMinUnits = mIsOccupiedOrActive ? kActiveAdvIntervalMinUnits : kIdleAdvIntervalMinUnits;
+    const uint16_t steadyMaxUnits = mIsOccupiedOrActive ? kActiveAdvIntervalMaxUnits : kIdleAdvIntervalMaxUnits;
+
     if (!mAdvertising) {
         mInBurstMode = false;
-        return ApplyAdvertisingParams(kIdleAdvIntervalMinUnits, kIdleAdvIntervalMaxUnits);
+        return ApplyAdvertisingParams(steadyMinUnits, steadyMaxUnits);
     }
 
     int ret = bt_le_adv_update_data(ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
     if (ret != 0) {
         LOG_WRN("bt_le_adv_update_data failed (err: %d); restarting advertising", ret);
         return ApplyAdvertisingParams(
-            mInBurstMode ? kBurstAdvIntervalMinUnits : kIdleAdvIntervalMinUnits,
-            mInBurstMode ? kBurstAdvIntervalMaxUnits : kIdleAdvIntervalMaxUnits);
+            mInBurstMode ? kBurstAdvIntervalMinUnits : steadyMinUnits,
+            mInBurstMode ? kBurstAdvIntervalMaxUnits : steadyMaxUnits);
     }
 
     LOG_INF("BTHome update [pkt=%u]: occ=%d mot=%d dist=%u mm bat=%u%% (%u mV)",
@@ -174,5 +179,7 @@ void BthomeAdvertiser::TransitionToIdleInterval()
         return;
     }
     mInBurstMode = false;
-    ApplyAdvertisingParams(kIdleAdvIntervalMinUnits, kIdleAdvIntervalMaxUnits);
+    const uint16_t steadyMinUnits = mIsOccupiedOrActive ? kActiveAdvIntervalMinUnits : kIdleAdvIntervalMinUnits;
+    const uint16_t steadyMaxUnits = mIsOccupiedOrActive ? kActiveAdvIntervalMaxUnits : kIdleAdvIntervalMaxUnits;
+    ApplyAdvertisingParams(steadyMinUnits, steadyMaxUnits);
 }

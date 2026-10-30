@@ -12,12 +12,14 @@ LOG_MODULE_REGISTER(app_task, LOG_LEVEL_INF);
 
 namespace {
 
-static constexpr uint32_t kEvtOt2Edge              = BIT(0);
-static constexpr uint32_t kEvtOccupiedPoll         = BIT(1);
-static constexpr uint32_t kEvtHeartbeat            = BIT(2);
-static constexpr uint32_t kEvtBatterySample        = BIT(3);
-static constexpr uint32_t kEvtBurstDone            = BIT(4);
-static constexpr uint16_t kDistanceBurstThresholdMm = 100u;
+static constexpr uint32_t kEvtOt2Edge                      = BIT(0);
+static constexpr uint32_t kEvtOccupiedPoll                 = BIT(1);
+static constexpr uint32_t kEvtHeartbeat                    = BIT(2);
+static constexpr uint32_t kEvtBatterySample                = BIT(3);
+static constexpr uint32_t kEvtBurstDone                    = BIT(4);
+static constexpr uint16_t kDistanceBurstThresholdMm        = 100u;
+static constexpr int64_t  kPostTransitionReassertWindowMs  = 15000;
+static constexpr int64_t  kPostTransitionReassertPeriodMs  = 3200;
 
 } // namespace
 
@@ -25,6 +27,8 @@ AppTask::AppTask()
     : mBatteryStatus{BatteryMonitor::VOLTAGE_NOMINAL_MV, 50, BatteryChargeLevel::OK, false},
       mLastRadarReport{Ld2410sTargetState::Unoccupied, false, false, 0, 0, true},
       mPendingEvents(ATOMIC_INIT(0)),
+      mLastStateChangeMs(0),
+      mLastPublishMs(0),
       mLastPublishedDistanceMm(0u),
       mLastOccupied(false),
       mLastMotion(false)
@@ -89,29 +93,19 @@ void AppTask::PublishCurrentState(bool burst)
         .distanceMm = mLastRadarReport.distanceMm,
     };
 
+    mLastPublishMs = k_uptime_get();
     mAdvertiser.Publish(m, burst);
 }
 
 void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
 {
-    const int64_t nowMs = k_uptime_get();
-
-    // Fast-path for 5-wire setups (OT2 -> P0.17): on a rising OT2 hardware interrupt
-    // when transitioning from unoccupied -> occupied, broadcast occupancy=true, motion=true
-    // over BLE immediately (< 5 ms) BEFORE waking UART0 to read exact target distance!
-    if (forceBurst && !mLastOccupied && mRadar.ReadPinOccupancy()) {
-        mMotionTracker.NotifyEntryEdge(nowMs);
-        mLastOccupied              = true;
-        mLastMotion                = true;
-        mLastRadarReport.occupied  = true;
-        mLastRadarReport.motion    = true;
-        mLastRadarReport.state     = Ld2410sTargetState::Moving;
-        PublishCurrentState(true);
-    }
-
     Ld2410sReport report{};
     mRadar.SampleTargetReport(&report);
-    mMotionTracker.Update(&report, k_uptime_get());
+
+    const int64_t nowMs = k_uptime_get();
+    static constexpr uint16_t kMaxBathroomDistanceMm =
+        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kGateWidthMm);
+    mMotionTracker.Update(&report, nowMs, kMaxBathroomDistanceMm);
     mLastRadarReport = report;
 
     const bool stateChanged = (report.occupied != mLastOccupied) ||
@@ -124,10 +118,25 @@ void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
     const bool significantDistChange = report.occupied &&
                                        (distDeltaMm >= kDistanceBurstThresholdMm);
 
+    if (stateChanged) {
+        mLastStateChangeMs = nowMs;
+    }
+
+    // Re-assert recent occupancy/motion transitions every 3.2 s for 15 s so ESPHome
+    // Wi-Fi/BLE shared-antenna proxies never miss a motion->off or occupancy->off edge.
+    const bool shouldReassertTransition =
+        (mLastStateChangeMs > 0) &&
+        ((nowMs - mLastStateChangeMs) <= kPostTransitionReassertWindowMs) &&
+        ((nowMs - mLastPublishMs) >= kPostTransitionReassertPeriodMs);
+
     mLastOccupied = report.occupied;
     mLastMotion   = report.motion;
 
-    const bool shouldBurst = forceBurst || occupancyEdge || stateChanged || significantDistChange;
+    const bool shouldBurst = forceBurst ||
+                             occupancyEdge ||
+                             stateChanged ||
+                             significantDistChange ||
+                             shouldReassertTransition;
     if (shouldBurst || forcePublish || distanceChanged) {
         mLastPublishedDistanceMm = report.distanceMm;
         PublishCurrentState(shouldBurst);

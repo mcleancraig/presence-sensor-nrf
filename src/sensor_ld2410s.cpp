@@ -49,13 +49,14 @@ SensorLd2410s::SensorLd2410s()
     : mUartDev(DEVICE_DT_GET_OR_NULL(DT_NODELABEL(uart0))),
       mOt2Gpio(GPIO_DT_SPEC_GET_OR(ZEPHYR_USER_NODE, presence_ot2_gpios, {0})),
       mEdgeCallback(nullptr),
-      mLastBootReport{Ld2410sTargetState::Unoccupied, false, false, 0, 0, true},
+      mLastValidReport{Ld2410sTargetState::Unoccupied, false, false, 0, 0, true},
+      mLastUartReportMs(0),
       mRxRing{},
       mRxHead(0),
       mRxTail(0),
       mRxBytesSeen(0),
       mLastDistanceMm(0),
-      mHasBootReport(false),
+      mHasValidUartReport(false),
       mSwapRxTxPins(false),
       mUartSuspended(false),
       mRadarConfigured(false),
@@ -159,15 +160,26 @@ void SensorLd2410s::ApplyUartPinMapping(bool swapPins)
 
 void SensorLd2410s::ParseBufferedBootReports()
 {
+    static constexpr uint16_t kMaxBathroomDistanceMm =
+        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kGateWidthMm);
+
     uint8_t rxByte = 0;
     while (PopRxByte(&rxByte)) {
         Ld2410sParsedFrame frame{};
         if (mParser.PushByte(rxByte, &frame) && frame.type == Ld2410sFrameType::Report) {
-            mLastBootReport = frame.report;
-            mHasBootReport  = true;
-            if (frame.report.occupied && frame.report.distanceMm > 0) {
-                mLastDistanceMm = frame.report.distanceMm;
+            if (!frame.report.occupied ||
+                frame.report.distanceMm == 0u ||
+                frame.report.distanceMm > kMaxBathroomDistanceMm) {
+                frame.report.state      = Ld2410sTargetState::Unoccupied;
+                frame.report.occupied   = false;
+                frame.report.motion     = false;
+                frame.report.distanceCm = 0u;
+                frame.report.distanceMm = 0u;
             }
+            mLastValidReport    = frame.report;
+            mHasValidUartReport = true;
+            mLastUartReportMs   = k_uptime_get();
+            mLastDistanceMm     = frame.report.occupied ? frame.report.distanceMm : 0u;
         }
     }
 }
@@ -396,13 +408,13 @@ int SensorLd2410s::Init(Ot2EdgeCallback edgeCb)
 
     // If no valid report frame arrived on the default pin mapping (RX=P0.08, TX=P0.06) and
     // configuration did not ACK, automatically probe swapped pins (RX=P0.06, TX=P0.08).
-    if (!mHasBootReport && !mRadarConfigured) {
+    if (!mHasValidUartReport && !mRadarConfigured) {
         LOG_WRN("No valid frame/ACK on default UART pins (RX=P0.08, TX=P0.06, rx_bytes=%u); probing swapped pins (RX=P0.06, TX=P0.08)",
                 mRxBytesSeen);
         ApplyUartPinMapping(true);
         k_msleep(kPinSwapProbeSettleMs);
         ParseBufferedBootReports();
-        if (ConfigureRadarParameters() == 0 || mHasBootReport) {
+        if (ConfigureRadarParameters() == 0 || mHasValidUartReport) {
             LOG_INF("HLK-LD2410S active on swapped UART pins (RX=P0.06, TX=P0.08, rx_bytes=%u)", mRxBytesSeen);
         } else {
             LOG_WRN("No response on swapped UART pins; restoring default mapping (RX=P0.08, TX=P0.06)");
@@ -410,9 +422,9 @@ int SensorLd2410s::Init(Ot2EdgeCallback edgeCb)
         }
     }
 
-    // Ensure uart0 is suspended after boot configuration even if ScopedUartWake
-    // started with mUartSuspended == false.
-    SuspendUart();
+    // Keep uart0 RX continuously active in interrupt mode so OnUartIsr captures 100%
+    // of asynchronous 5-byte / Standard radar frames into mRxRing with zero blind spots.
+    ResumeUart();
 
     return 0;
 }
@@ -436,45 +448,57 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
         mOt2SignalSeen = true;
     }
 
-    const uint32_t effectiveTimeoutMs =
-        (!mRadarConfigured && timeoutMs < kFallbackSampleTimeoutMs) ? kFallbackSampleTimeoutMs : timeoutMs;
+    ResumeUart();
 
-    // Flush stale ring-buffer bytes BEFORE waking UART0 so no incoming byte
-    // received immediately after ResumeUart() is discarded.
-    DrainUartRx();
+    static constexpr uint16_t kMaxBathroomDistanceMm =
+        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kGateWidthMm);
 
-    // Briefly resume uart0 and enable RX interrupt to capture one report frame from the radar
-    auto resumeCb = [](void *ctx) -> int { return static_cast<SensorLd2410s *>(ctx)->ResumeUart(); };
-    auto suspendCb = [](void *ctx) -> int { return static_cast<SensorLd2410s *>(ctx)->SuspendUart(); };
-    ScopedUartWake uartWake(resumeCb, suspendCb, this);
-
-    const int64_t deadline = k_uptime_get() + static_cast<int64_t>(effectiveTimeoutMs);
-    while (true) {
-        uint8_t rxByte = 0;
+    auto drainFramesFromRing = [&]() -> bool {
+        bool decodedAny = false;
+        uint8_t rxByte  = 0;
         while (PopRxByte(&rxByte)) {
             Ld2410sParsedFrame frame{};
             if (mParser.PushByte(rxByte, &frame) && frame.type == Ld2410sFrameType::Report) {
-                mHasBootReport = false;
-                *outReport = frame.report;
-                if (pinOccupied && !outReport->occupied) {
-                    outReport->occupied = true;
+                if (!frame.report.occupied ||
+                    frame.report.distanceMm == 0u ||
+                    frame.report.distanceMm > kMaxBathroomDistanceMm) {
+                    frame.report.state      = Ld2410sTargetState::Unoccupied;
+                    frame.report.occupied   = false;
+                    frame.report.motion     = false;
+                    frame.report.distanceCm = 0u;
+                    frame.report.distanceMm = 0u;
                 }
-                if (outReport->occupied) {
-                    if (outReport->distanceMm > 0) {
-                        mLastDistanceMm = outReport->distanceMm;
-                    } else if (mLastDistanceMm > 0) {
-                        outReport->distanceMm = mLastDistanceMm;
-                        outReport->distanceCm = static_cast<uint16_t>(mLastDistanceMm / 10u);
-                    }
-                } else {
-                    mLastDistanceMm       = 0;
-                    outReport->distanceMm = 0;
-                    outReport->distanceCm = 0;
-                }
-                return 0;
+                mLastValidReport    = frame.report;
+                mHasValidUartReport = true;
+                mLastUartReportMs   = k_uptime_get();
+                mLastDistanceMm     = frame.report.occupied ? frame.report.distanceMm : 0u;
+                decodedAny          = true;
             }
         }
+        return decodedAny;
+    };
 
+    // 1. Drain all complete frames already buffered in mRxRing by OnUartIsr (0 ms non-blocking!)
+    if (drainFramesFromRing()) {
+        *outReport = mLastValidReport;
+        return 0;
+    }
+
+    // 2. If no new frame completed during this 400 ms tick (e.g. radar reporting at 1 Hz / 1000 ms),
+    //    return the latest valid UART report immediately without blocking or letting OT2 override it.
+    const int64_t nowMs = k_uptime_get();
+    if (mHasValidUartReport && (nowMs - mLastUartReportMs) <= kUartStaleReportTimeoutMs) {
+        *outReport = mLastValidReport;
+        return 0;
+    }
+
+    // 3. If UART has been silent for > 2.5 s (or right at boot), wait up to timeoutMs for a frame
+    const int64_t deadline = nowMs + static_cast<int64_t>(timeoutMs);
+    while (true) {
+        if (drainFramesFromRing()) {
+            *outReport = mLastValidReport;
+            return 0;
+        }
         const int64_t remainingMs = deadline - k_uptime_get();
         if (remainingMs <= 0) {
             break;
@@ -482,18 +506,9 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
         k_sem_take(&mRxSem, K_MSEC(remainingMs));
     }
 
-    // If a valid report was already captured during the boot settle window, use it
-    if (mHasBootReport) {
-        mHasBootReport = false;
-        *outReport     = mLastBootReport;
-        if (pinOccupied && !outReport->occupied) {
-            outReport->occupied = true;
-        }
-        return 0;
-    }
-
-    // Fallback if no UART report frame arrived within timeoutMs: use hardware OT2 pin state
-    if (pinOccupied) {
+    // 4. UART has been silent for > 2.5 s: if OT2 is LOW (or last distance was out of bounds),
+    //    clear state to Unoccupied; only fall back to OT2 if OT2 is HIGH and last distance was in range.
+    if (pinOccupied && mLastDistanceMm > 0u && mLastDistanceMm <= kMaxBathroomDistanceMm) {
         outReport->state          = Ld2410sTargetState::Stationary;
         outReport->occupied       = true;
         outReport->motion         = false;
@@ -502,6 +517,7 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
         outReport->isMinimalFrame = true;
     } else {
         mLastDistanceMm           = 0;
+        mLastValidReport          = {Ld2410sTargetState::Unoccupied, false, false, 0, 0, true};
         outReport->state          = Ld2410sTargetState::Unoccupied;
         outReport->occupied       = false;
         outReport->motion         = false;

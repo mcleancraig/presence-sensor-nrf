@@ -10,18 +10,20 @@
 
 class BthomeAdvertiser {
 public:
-    // Burst advertisement parameters on occupancy state transitions:
-    // 25-35 ms interval (40-56 * 0.625 ms) for 1000 ms (~33 packets across all 3 BLE adv channels)
-    // for instant (< 50 ms BLE air latency) bathroom light-switch responsiveness.
-    static constexpr uint16_t kBurstAdvIntervalMinUnits = 40;   // 25 ms
-    static constexpr uint16_t kBurstAdvIntervalMaxUnits = 56;   // 35 ms
-    static constexpr int32_t  kBurstDurationMs          = 1000;
+    // Burst advertisement parameters on occupancy/motion state transitions:
+    // 25-35 ms interval (40-56 * 0.625 ms) for 3000 ms (~100 packets across all 3 BLE adv channels)
+    // guaranteeing 100% reception across ESPHome Wi-Fi/BLE shared-antenna proxy scan windows.
+    static constexpr uint16_t kBurstAdvIntervalMinUnits  = 40;   // 25 ms
+    static constexpr uint16_t kBurstAdvIntervalMaxUnits  = 56;   // 35 ms
+    static constexpr int32_t  kBurstDurationMs           = 3000; // 3.0 s
 
-    // Idle background BLE advertising interval between state changes:
-    // 2500 ms (4000 * 0.625 ms) keeps average BLE controller draw under ~6 uA
-    // while allowing instant Home Assistant passive discovery at any time.
-    static constexpr uint16_t kIdleAdvIntervalMinUnits  = 4000; // 2500 ms
-    static constexpr uint16_t kIdleAdvIntervalMaxUnits  = 4160; // 2600 ms
+    // Active post-burst BLE advertising interval while occupied/motion is active (~500 ms):
+    static constexpr uint16_t kActiveAdvIntervalMinUnits = 768;  // 480 ms
+    static constexpr uint16_t kActiveAdvIntervalMaxUnits = 832;  // 520 ms
+
+    // Idle background BLE advertising interval when unoccupied (~1500 ms):
+    static constexpr uint16_t kIdleAdvIntervalMinUnits   = 2400; // 1500 ms
+    static constexpr uint16_t kIdleAdvIntervalMaxUnits   = 2560; // 1600 ms
 
     BthomeAdvertiser();
 
@@ -59,4 +61,5 @@ private:
     uint8_t        mPacketId;
     bool           mAdvertising;
     bool           mInBurstMode;
+    bool           mIsOccupiedOrActive;
 };
