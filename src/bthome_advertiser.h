@@ -34,14 +34,14 @@ public:
     /**
      * @brief Publish a new sensor measurement.
      * @param m Latest battery + radar measurement (packetId is auto-incremented).
-     * @param burst true to transmit a 1.5 s fast burst (100 ms interval) before
-     *              transitioning back to low-power slow advertising.
+     * @param burst true to transmit a 1.0 s high-density burst (25-35 ms interval)
+     *              before transitioning back to 2.5 s low-power idle advertising.
      */
     int Publish(const BthomeMeasurement &m, bool burst);
 
     /**
      * @brief Called from the application event loop when the burst timer expires
-     *        to transition from 100 ms burst interval back to 2.5 s idle interval.
+     *        to transition from 25-35 ms burst interval back to 2.5 s idle interval.
      */
     void TransitionToIdleInterval();
 

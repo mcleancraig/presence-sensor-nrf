@@ -49,9 +49,10 @@ public:
 
     /**
      * @brief Sample the latest radar state and target distance.
-     *        If OT2 is LOW, returns immediately without waking uart0.
-     *        If OT2 is HIGH, resumes uart0 for at most timeoutMs to parse one
-     *        report frame, then immediately re-suspends uart0.
+     *        If OT2 has been observed active (5-wire mode) and is currently LOW,
+     *        returns Unoccupied immediately without waking uart0. Otherwise (occupied
+     *        or 4-wire UART-only mode), resumes uart0 for at most timeoutMs (~62 ms
+     *        average at 8.0 Hz) to parse one report frame, then immediately re-suspends uart0.
      */
     int SampleTargetReport(Ld2410sReport *outReport, uint32_t timeoutMs = kDefaultSampleTimeoutMs);
 

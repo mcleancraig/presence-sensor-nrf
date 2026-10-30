@@ -71,7 +71,7 @@ Object IDs are encoded in **strictly ascending numerical order** per the BTHome 
 
 - **Immediate State-Change Burst (`25–35 ms` Interval)**: On any occupancy/motion transition (`OT2` interrupt or UART target-state change) or `>= 100 mm` distance shift while occupied, the broadcaster enters a **25–35 ms high-density advertising burst for 1.0 s** (~33 BLE packets) with a newly incremented Packet ID so Home Assistant triggers bathroom lighting/automation within `< 50 ms` of detection.
 - **Instant `OT2` Rising-Edge Fast-Path (`< 5 ms`)**: When `OT2` (`Pin 5 -> P0.17`) is wired, a rising edge broadcasts `Occupancy = Detected` and `Motion = Detected` over BLE **immediately (`< 5 ms`) before** waking `uart0` to sample exact millimeter distance.
-- **Sub-Second 4-Wire UART Polling (`400 ms` / `8.0 Hz`)**: Even in a 4-wire setup without `OT2` connected (`3V3`, `GND`, `OT1`, `RX`), `uart0` wakes every **`400 ms`** (`CONFIG_APP_RADAR_POLL_INTERVAL_MS`) for an average of **`~62 ms`** (`220 ms` max timeout at `8.0 Hz` radar reporting) to sample target state (`0x00`/`0x01` Clear, `0x02` Stationary, `0x03` Moving) and millimeter distance before immediately re-suspending `uart0`.
+- **Sub-Second 4-Wire UART Polling (`400 ms` / `8.0 Hz`) & Kinematic Motion Classifier (`Ld2410sMotionTracker`)**: Even in a 4-wire setup without `OT2` connected (`3V3`, `GND`, `OT1`, `RX`), `uart0` wakes every **`400 ms`** (`CONFIG_APP_RADAR_POLL_INTERVAL_MS`) for an average of **`~62 ms`** (`220 ms` max timeout at `8.0 Hz` radar reporting) to sample target state and millimeter distance before immediately re-suspending `uart0`. Because the HLK-LD2410S Minimal 5-Byte output (`6E [state] [dist_lo] [dist_hi] 62`) only emits `0x00`/`0x01` (Unoccupied) and `0x02` (Occupied) without a distinct `0x03` moving code, `Ld2410sMotionTracker` combines entry edges, explicit `0x03` Standard frames, and radial distance kinematics (`>= 100 mm` movement) with a `5.0 s` active hold window so **Motion (`0x21`)** reports `Detected` on entry/walking and transitions cleanly to `Clear` after `5.0 s` of stillness while **Occupancy (`0x23`)** remains `Detected`.
 - **Steady-State Idle Broadcast**: Between events, the advertising interval relaxes to **2.5 s** (`2500 ms`), keeping average BLE radio current at ~`7 µA`, with a periodic state refresh every `60 s` (`CONFIG_APP_HEARTBEAT_INTERVAL_SEC`).
 - **Battery Refresh**: SAADC `VDDH/5` is sampled at boot and every `6 hours` (`21600 s`, `CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC`).
 
@@ -173,15 +173,15 @@ scripts/fetch-firmware.sh --debug   # USB CDC ACM debug build
 
 | Contributor | Approx. Average Current |
 | :--- | :--- |
-| **HLK-LD2410S** (Low-Speed 1 Hz low-power mode via `P0.13` 3.3 V rail) | `58 – 100 µA` |
+| **HLK-LD2410S** (Low-power mode via `P0.13` 3.3 V rail; `8.0 Hz` fast response) | `58 – 120 µA` |
 | **nRF52840 System ON Idle** (RTC + RAM retention + GPIOTE `PORT` event on `P0.17`) | `~3 µA` |
-| **BLE Non-Connectable Scannable Advertising** (2.5 s idle + event bursts) | `~7 µA` |
-| **Brief `uart0` Wake Windows** (event-driven + 15 s occupied refresh, suspended in idle) | `< 3 µA` |
-| **Hourly SAADC `VDDH/5` Battery Sample** (one-shot, 16× oversampling) | `< 0.1 µA` |
+| **BLE Non-Connectable Scannable Advertising** (2.5 s idle + `25–35 ms` `1.0 s` event bursts) | `~7 µA` |
+| **Brief `uart0` Wake Windows** (`OT2`-gated in 5-wire mode; `~62 ms` every `400 ms` while occupied/4-wire) | `~3 – 75 µA` |
+| **6-Hour SAADC `VDDH/5` Battery Sample** (one-shot, 16× oversampling) | `< 0.1 µA` |
 | **SuperMini Quiescent / Diode Leakage** (batch-dependent) | `4 – 60 µA` |
-| **Total Estimated System Average** | **`~75 – 170 µA`** |
+| **Total Estimated System Average** | **`~75 – 265 µA`** |
 
-With a **2800 mAh Li-ion cell** (~`2200 mAh` usable above `3.0 V`), a `75 – 170 µA` average current yields **1.5 to 3.3 years** of continuous runtime per charge.
+With a **2800 mAh Li-ion cell** (~`2200 mAh` usable above `3.0 V`), a `75 – 265 µA` average current yields **1.0 to 3.3 years** of continuous runtime per charge (longest in 5-wire `OT2` mode where `uart0` stays completely suspended while the bathroom is unoccupied).
 
 ---
 

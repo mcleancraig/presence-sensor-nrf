@@ -327,12 +327,111 @@ static void TestBthomeV2EncodingAndSpecCompliance()
     EXPECT_TRUE(strcmp(nameA, nameB) != 0, "Distinct FICR IDs produce distinct BLE names");
 }
 
+static void TestLd2410sMotionTrackerKinematics()
+{
+    Ld2410sMotionTracker tracker;
+
+    // 1. Entry with Minimal 5-Byte 0x02 frame at t = 1000 ms (700 mm):
+    // Even though Minimal mode emits 0x02 (Stationary), entering an unoccupied room
+    // must synthesize motion = true and state = Moving.
+    Ld2410sReport r1 = {
+        .state          = Ld2410sTargetState::Stationary,
+        .occupied       = true,
+        .motion         = false,
+        .distanceCm     = 70u,
+        .distanceMm     = 700u,
+        .isMinimalFrame = true,
+    };
+    tracker.Update(&r1, 1000);
+    EXPECT_TRUE(r1.occupied, "Entry frame occupied=true");
+    EXPECT_TRUE(r1.motion, "Entry frame synthesizes motion=true");
+    EXPECT_EQ(static_cast<uint8_t>(r1.state), static_cast<uint8_t>(Ld2410sTargetState::Moving),
+              "Entry frame upgrades state to Moving");
+    EXPECT_EQ(tracker.GetAnchorDistanceMm(), 700u, "Entry frame anchors at 700 mm");
+
+    // 2. Stillness within 5.0 s hold window (t = 4500 ms, elapsed = 3500 ms < 5000 ms, 740 mm -> +40 mm < 100 mm):
+    Ld2410sReport r2 = r1;
+    r2.state      = Ld2410sTargetState::Stationary;
+    r2.motion     = false;
+    r2.distanceCm = 74u;
+    r2.distanceMm = 740u;
+    tracker.Update(&r2, 4500);
+    EXPECT_TRUE(r2.occupied, "Within 5s hold occupied=true");
+    EXPECT_TRUE(r2.motion, "Within 5s hold motion stays true");
+    EXPECT_EQ(tracker.GetAnchorDistanceMm(), 700u, "Sub-100mm jitter does not shift motion anchor");
+
+    // 3. Radial walk at t = 4800 ms to 1200 mm (+500 mm >= 100 mm) extends motion window:
+    Ld2410sReport r3 = r1;
+    r3.state      = Ld2410sTargetState::Stationary;
+    r3.motion     = false;
+    r3.distanceCm = 120u;
+    r3.distanceMm = 1200u;
+    tracker.Update(&r3, 4800);
+    EXPECT_TRUE(r3.motion, "Radial walk >= 100 mm keeps motion=true");
+    EXPECT_EQ(tracker.GetAnchorDistanceMm(), 1200u, "Radial walk updates anchor to 1200 mm");
+    EXPECT_EQ(tracker.GetLastMotionTimestampMs(), 4800, "Radial walk updates motion timestamp to 4800 ms");
+
+    // 4. Stillness for >= 5000 ms after last movement (t = 9800 ms, elapsed = 5000 ms at 1150 mm -> -50 mm < 100 mm):
+    // Must transition cleanly to motion = false (Stationary) while occupied stays true!
+    Ld2410sReport r4 = r3;
+    r4.state      = Ld2410sTargetState::Stationary;
+    r4.motion     = false;
+    r4.distanceCm = 115u;
+    r4.distanceMm = 1150u;
+    tracker.Update(&r4, 9800);
+    EXPECT_TRUE(r4.occupied, "After 5s stillness occupied stays true");
+    EXPECT_TRUE(!r4.motion, "After 5s stillness motion transitions to false (Clear)");
+    EXPECT_EQ(static_cast<uint8_t>(r4.state), static_cast<uint8_t>(Ld2410sTargetState::Stationary),
+              "After 5s stillness state is Stationary (0x02)");
+
+    // 5. Subsequent movement while occupied (t = 12000 ms, 1150 mm -> 350 mm, delta = 850 mm >= 100 mm):
+    // Must re-trigger motion = true!
+    Ld2410sReport r5 = r4;
+    r5.distanceCm = 35u;
+    r5.distanceMm = 350u;
+    tracker.Update(&r5, 12000);
+    EXPECT_TRUE(r5.occupied, "Re-triggered movement occupied=true");
+    EXPECT_TRUE(r5.motion, "Re-triggered movement >= 100 mm sets motion=true");
+    EXPECT_EQ(tracker.GetAnchorDistanceMm(), 350u, "Re-triggered movement updates anchor to 350 mm");
+
+    // 6. Departure at t = 14000 ms: immediately clears motion, occupied, and anchor:
+    Ld2410sReport r6 = {
+        .state          = Ld2410sTargetState::Unoccupied,
+        .occupied       = false,
+        .motion         = false,
+        .distanceCm     = 0u,
+        .distanceMm     = 0u,
+        .isMinimalFrame = true,
+    };
+    tracker.Update(&r6, 14000);
+    EXPECT_TRUE(!r6.occupied, "Departure occupied=false");
+    EXPECT_TRUE(!r6.motion, "Departure motion=false");
+    EXPECT_EQ(r6.distanceMm, 0u, "Departure distanceMm=0");
+    EXPECT_EQ(tracker.GetAnchorDistanceMm(), 0u, "Departure resets motion anchor to 0");
+
+    // 7. 5-wire OT2 rising-edge fast-path followed 62 ms later by Minimal 0x02 sample:
+    tracker.NotifyEntryEdge(20000);
+    Ld2410sReport r7 = {
+        .state          = Ld2410sTargetState::Stationary,
+        .occupied       = true,
+        .motion         = false,
+        .distanceCm     = 110u,
+        .distanceMm     = 1100u,
+        .isMinimalFrame = true,
+    };
+    tracker.Update(&r7, 20062);
+    EXPECT_TRUE(r7.occupied, "Post-OT2 Minimal 0x02 sample occupied=true");
+    EXPECT_TRUE(r7.motion, "Post-OT2 Minimal 0x02 sample preserves motion=true");
+    EXPECT_EQ(tracker.GetAnchorDistanceMm(), 1100u, "Post-OT2 sample anchors at 1100 mm");
+}
+
 int main()
 {
     TestLd2410sCommandBuilders();
     TestLd2410sParserMinimalAndEdgeCases();
     TestLd2410sParserStandardAndAckWithNoise();
     TestBthomeV2EncodingAndSpecCompliance();
+    TestLd2410sMotionTrackerKinematics();
 
     if (sTestsFailed > 0) {
         fprintf(stderr, "FAILED: %d/%d assertions failed\n", sTestsFailed, sTestsRun);

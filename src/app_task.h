@@ -29,7 +29,7 @@ public:
     void NotifyOt2Edge();
 
     /**
-     * @brief Signal from timer context that the 1.5 s BLE burst window completed.
+     * @brief Signal from timer context that the 1.0 s BLE burst window completed.
      */
     void NotifyBurstComplete();
 
@@ -46,11 +46,12 @@ private:
     void SampleBattery();
     void PublishCurrentState(bool burst);
 
-    SensorLd2410s      mRadar;
-    BthomeAdvertiser   mAdvertiser;
-    BatteryStatus      mBatteryStatus;
-    Ld2410sReport      mLastRadarReport;
-    struct k_sem       mEventSem;
+    SensorLd2410s        mRadar;
+    BthomeAdvertiser     mAdvertiser;
+    BatteryStatus        mBatteryStatus;
+    Ld2410sReport        mLastRadarReport;
+    Ld2410sMotionTracker mMotionTracker;
+    struct k_sem         mEventSem;
     atomic_t           mPendingEvents;
     struct k_timer     mHeartbeatTimer;
     struct k_timer     mOccupiedPollTimer;

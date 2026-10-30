@@ -317,3 +317,84 @@ bool Ld2410sFrameParser::TryParseBuffer(Ld2410sParsedFrame *outFrame)
 
     return false;
 }
+
+Ld2410sMotionTracker::Ld2410sMotionTracker()
+    : mLastMotionDetectedMs(0),
+      mLastMotionAnchorDistMm(0u),
+      mWasOccupied(false),
+      mHasMotionTimestamp(false)
+{
+}
+
+void Ld2410sMotionTracker::Reset()
+{
+    mLastMotionDetectedMs   = 0;
+    mLastMotionAnchorDistMm = 0u;
+    mWasOccupied            = false;
+    mHasMotionTimestamp     = false;
+}
+
+void Ld2410sMotionTracker::NotifyEntryEdge(int64_t nowMs)
+{
+    mWasOccupied        = true;
+    mHasMotionTimestamp = true;
+    mLastMotionDetectedMs = nowMs;
+}
+
+void Ld2410sMotionTracker::Update(Ld2410sReport *inoutReport, int64_t nowMs)
+{
+    if (!inoutReport) {
+        return;
+    }
+
+    if (!inoutReport->occupied) {
+        inoutReport->motion     = false;
+        inoutReport->distanceMm = 0u;
+        if (inoutReport->state != Ld2410sTargetState::NoTarget) {
+            inoutReport->state = Ld2410sTargetState::Unoccupied;
+        }
+        Reset();
+        return;
+    }
+
+    if (!mWasOccupied) {
+        // Unoccupied -> Occupied entry always represents active motion
+        mWasOccupied            = true;
+        mHasMotionTimestamp     = true;
+        mLastMotionDetectedMs   = nowMs;
+        mLastMotionAnchorDistMm = inoutReport->distanceMm;
+    } else if (inoutReport->motion || inoutReport->state == Ld2410sTargetState::Moving) {
+        // Explicit 0x03 Moving state reported by Standard output frame
+        mHasMotionTimestamp     = true;
+        mLastMotionDetectedMs   = nowMs;
+        if (inoutReport->distanceMm > 0u) {
+            mLastMotionAnchorDistMm = inoutReport->distanceMm;
+        }
+    } else if (mLastMotionAnchorDistMm == 0u && inoutReport->distanceMm > 0u) {
+        // First non-zero distance sample after an OT2 rising-edge fast-path
+        mLastMotionAnchorDistMm = inoutReport->distanceMm;
+        mHasMotionTimestamp     = true;
+        mLastMotionDetectedMs   = nowMs;
+    } else {
+        const uint16_t distDeltaMm =
+            (inoutReport->distanceMm > mLastMotionAnchorDistMm)
+                ? static_cast<uint16_t>(inoutReport->distanceMm - mLastMotionAnchorDistMm)
+                : static_cast<uint16_t>(mLastMotionAnchorDistMm - inoutReport->distanceMm);
+
+        if (distDeltaMm >= kMotionDeltaThresholdMm) {
+            mLastMotionAnchorDistMm = inoutReport->distanceMm;
+            mHasMotionTimestamp     = true;
+            mLastMotionDetectedMs   = nowMs;
+        }
+    }
+
+    const int64_t elapsedMs = nowMs - mLastMotionDetectedMs;
+    const bool activeMotion = mHasMotionTimestamp &&
+                              (elapsedMs >= 0) &&
+                              (elapsedMs < kMotionHoldWindowMs);
+
+    inoutReport->motion = activeMotion;
+    inoutReport->state  = activeMotion ? Ld2410sTargetState::Moving
+                                       : Ld2410sTargetState::Stationary;
+}
+

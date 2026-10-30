@@ -45,12 +45,18 @@ This document records the hardware, bootloader, power-management, and protocol d
   3. **During idle sleep**: `uart0` RX/TX pins (`P0.08` / `P0.06`) transition to the `sleep` pinctrl state (`low-power-enable`), eliminating pin leakage while the HLK-LD2410S runs. The nRF52840 sleeps at `< 3 µA` waiting on `P0.17` (`OT2` `GPIO_INT_EDGE_BOTH`) or the `400 ms` sub-second poll timer (`CONFIG_APP_RADAR_POLL_INTERVAL_MS`).
   4. **On `OT2` edge or `400 ms` periodic poll (`CONFIG_APP_RADAR_POLL_INTERVAL_MS=400`)**: If `OT2` (`P0.17`) is wired and transitions `LOW -> HIGH`, `AppTask` broadcasts `Occupancy = Detected, Motion = Detected` over BLE **immediately (`< 5 ms`)** before waking `uart0`. `SampleTargetReport()` then flushes stale buffer state *before* `ScopedUartWake` resumes `uart0` (`PM_DEVICE_ACTION_RESUME` + `NRF_UARTE_TASK_STARTRX` + `uart_irq_rx_enable`), waits an average of **`~62 ms`** (up to `220 ms` max timeout `kDefaultSampleTimeoutMs` at `8.0 Hz`, or `1150 ms` fallback if unconfigured) to parse the first valid frame (supporting both 5-byte Minimal `6E...62` and 12/80-byte Standard `F4 F3 F2 F1 ... F8 F7 F6 F5` output formats), and immediately re-suspends `uart0` on scope exit.
 
-### HLK-LD2410S Target State Encoding (`0x02` Stationary vs. `0x03` Moving)
-- On the real HLK-LD2410S hardware (`Minimal` `6E [state] [dist_lo] [dist_hi] 62` and `Standard` `F4 F3 F2 F1 ... [state] [dist_lo] [dist_hi] ... F8 F7 F6 F5`), the target state byte is encoded as:
+### HLK-LD2410S Target State Encoding & Minimal 5-Byte Kinematic Motion Synthesis (`Ld2410sMotionTracker`)
+- In Standard Output frames (`F4 F3 F2 F1 ... [state] [dist_lo] [dist_hi] ... F8 F7 F6 F5`), the target state byte is encoded as:
   - `0x00` (`NoTarget`) / `0x01` (`Unoccupied`): `occupied = false`, `motion = false`, `distanceMm = 0`
   - `0x02` (`Stationary`): `occupied = true`, **`motion = false`** (stationary / static breathing target)
   - `0x03` (`Moving`): `occupied = true`, **`motion = true`** (actively moving target)
-- Swapping `0x02` and `0x03` causes Home Assistant to invert `Motion` (`Clear` while walking, `Detected` while standing still). `Ld2410sProto::DecodeTargetReport()` maps `0x02 -> Stationary (motion = false)` and `0x03 -> Moving (motion = true)`.
+- **Critical Hardware Quirk in Minimal 5-Byte Mode (`6E [state] [dist_lo] [dist_hi] 62`)**: Live Home Assistant telemetry confirmed that in Minimal 5-Byte mode (`0x007A` = `0`), the HLK-LD2410S firmware **only emits `0x00`/`0x01` (Unoccupied) and `0x02` (Occupied)** — it never emits `0x03` even during active walking (`350 mm` to `2280 mm`)!
+- Consequently, `Ld2410sMotionTracker` (`src/ld2410s_proto.h` / `src/ld2410s_proto.cpp`) deterministically synthesizes `report.motion` (`BTHome` Object ID `0x21`) when `report.occupied == true`:
+  1. **Entry edge (`!mWasOccupied && report.occupied`)**: Entering an unoccupied room always triggers `motion = true` and anchors `mLastMotionAnchorDistMm = report.distanceMm`.
+  2. **Explicit `0x03` Moving state**: Any Standard frame reporting `0x03` triggers/extends `motion = true`.
+  3. **Radial kinematic movement (`|report.distanceMm - mLastMotionAnchorDistMm| >= 100 mm`)**: Moving `>= 10 cm` toward or away from the sensor updates `mLastMotionAnchorDistMm` and refreshes `mLastMotionDetectedMs = nowMs`.
+  4. **`5.0 s` Stillness Hold Window (`kMotionHoldWindowMs = 5000`)**: `motion` remains `true` (`Detected`) for `5000 ms` after entry or the last `>= 100 mm` movement, then transitions cleanly to `false` (`Clear` / Stationary) while `occupied` remains `true` (`Detected`).
+  5. **Departure (`!report.occupied`)**: Immediately resets `motion = false`, `distanceMm = 0`, and `mLastMotionAnchorDistMm = 0`.
 
 ### Sliding-Window Parser & Delimiter Collisions (`110 cm` / `98 cm`)
 - In the HLK-LD2410S Minimal 5-Byte output format (`6E [state] [dist_lo] [dist_hi] 62`), the header byte is `0x6E` (`110` decimal) and the footer byte is `0x62` (`98` decimal).

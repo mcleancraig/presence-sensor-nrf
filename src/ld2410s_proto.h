@@ -152,3 +152,48 @@ private:
     uint8_t mBuf[kMaxFrameBufferSize];
     size_t  mLen;
 };
+
+/**
+ * @brief Deterministic Radial-Kinematic + State Motion Classifier for HLK-LD2410S.
+ *
+ * In Minimal 5-Byte output mode (6E [state] [dist_lo] [dist_hi] 62), the HLK-LD2410S
+ * firmware emits 0x00/0x01 when unoccupied and 0x02 for all occupied frames (never
+ * emitting 0x03 in Minimal mode). This tracker synthesizes accurate BTHome Motion
+ * (0x21) alongside Occupancy (0x23) by combining:
+ *   1. Occupancy entry edge (unoccupied -> occupied always triggers motion),
+ *   2. Explicit 0x03 Moving state from Standard output frames, and
+ *   3. Radial distance displacement >= 100 mm (10 cm) from the motion anchor,
+ * holding motion=true for 5000 ms after the most recent movement before transitioning
+ * cleanly to motion=false (Stationary) while occupied remains true.
+ */
+class Ld2410sMotionTracker {
+public:
+    static constexpr uint16_t kMotionDeltaThresholdMm = 100u; // 10 cm radial movement threshold
+    static constexpr int64_t  kMotionHoldWindowMs     = 5000; // 5.0 s active motion hold window
+
+    Ld2410sMotionTracker();
+
+    void Reset();
+
+    /**
+     * @brief Record an immediate hardware OT2 rising-edge entry event at nowMs.
+     */
+    void NotifyEntryEdge(int64_t nowMs);
+
+    /**
+     * @brief Update report->motion and report->state in-place based on occupancy
+     *        transitions, explicit 0x03 state, radial distance kinematics, and
+     *        the 5.0 s stillness hold timer.
+     */
+    void Update(Ld2410sReport *inoutReport, int64_t nowMs);
+
+    uint16_t GetAnchorDistanceMm() const { return mLastMotionAnchorDistMm; }
+    int64_t GetLastMotionTimestampMs() const { return mLastMotionDetectedMs; }
+
+private:
+    int64_t  mLastMotionDetectedMs;
+    uint16_t mLastMotionAnchorDistMm;
+    bool     mWasOccupied;
+    bool     mHasMotionTimestamp;
+};
+

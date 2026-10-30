@@ -94,19 +94,24 @@ void AppTask::PublishCurrentState(bool burst)
 
 void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
 {
+    const int64_t nowMs = k_uptime_get();
+
     // Fast-path for 5-wire setups (OT2 -> P0.17): on a rising OT2 hardware interrupt
-    // when transitioning from unoccupied -> occupied, broadcast occupancy=true over BLE
-    // immediately (< 5 ms) BEFORE waking UART0 to read exact target distance!
+    // when transitioning from unoccupied -> occupied, broadcast occupancy=true, motion=true
+    // over BLE immediately (< 5 ms) BEFORE waking UART0 to read exact target distance!
     if (forceBurst && !mLastOccupied && mRadar.ReadPinOccupancy()) {
+        mMotionTracker.NotifyEntryEdge(nowMs);
         mLastOccupied              = true;
         mLastMotion                = true;
         mLastRadarReport.occupied  = true;
         mLastRadarReport.motion    = true;
+        mLastRadarReport.state     = Ld2410sTargetState::Moving;
         PublishCurrentState(true);
     }
 
     Ld2410sReport report{};
     mRadar.SampleTargetReport(&report);
+    mMotionTracker.Update(&report, k_uptime_get());
     mLastRadarReport = report;
 
     const bool stateChanged = (report.occupied != mLastOccupied) ||
