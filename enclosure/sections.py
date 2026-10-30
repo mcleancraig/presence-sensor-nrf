@@ -36,6 +36,7 @@ COLORS: dict[str, str] = {
     "board_parts": "#66c266",
     "radar": "#e67e22",
     "radar_parts": "#f39c12",
+    "dupont_5p": "#d35400",
     "usb_c_plug": "#8e44ad",
 }
 

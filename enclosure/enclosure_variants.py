@@ -85,8 +85,8 @@ def _add_snap_receivers(base: cq.Workplane) -> cq.Workplane:
     return base
 
 
-def make_snap_lid(with_vanity_foot: bool = False) -> cq.Workplane:
-    """Build compact flangeless snap-fit lid with blind 22x22x1.2 mm RF radome pocket."""
+def make_snap_lid(with_vanity_foot: bool = False, board_x: float = e.BOARD_X) -> cq.Workplane:
+    """Build compact flangeless snap-fit lid with blind 22x22x1.2 mm RF radome & PCB hold-downs."""
     lid = e.rrect(e.OUTER_L, e.OUTER_W, OUTER_R, e.H, e.LID_T)
     if with_vanity_foot:
         foot_y = -e.OUTER_W / 2 - VANITY_FOOT_OUT / 2 + 1.0
@@ -109,7 +109,8 @@ def make_snap_lid(with_vanity_foot: bool = False) -> cq.Workplane:
 
     # Blind interior pocket above HLK-LD2410S leaving uniform RADOME_T = 1.20 mm solid top skin
     radome_pocket = e.box(e.RADOME_L, e.RADOME_W, e.RADOME_DEPTH + 0.1, e.RADAR_X, e.Y_RADAR, e.H - 0.1)
-    return lid.cut(radome_pocket)
+    lid = lid.cut(radome_pocket)
+    return e._add_lid_holddowns(lid, board_x=board_x)
 
 
 # --------------------------------------------------------------------------------------
@@ -134,8 +135,8 @@ def make_corner_base() -> cq.Workplane:
 
 
 def make_corner_lid() -> cq.Workplane:
-    """Compact snap-fit lid with blind 1.20 mm RF radome pocket for Model 2."""
-    return make_snap_lid(with_vanity_foot=False)
+    """Compact snap-fit lid with blind 1.20 mm RF radome pocket and PCB hold-downs for Model 2."""
+    return make_snap_lid(with_vanity_foot=False, board_x=e.BOARD_X)
 
 
 def make_corner_bracket() -> cq.Workplane:
@@ -218,8 +219,8 @@ def make_vanity_base() -> cq.Workplane:
 
 
 def make_vanity_lid() -> cq.Workplane:
-    """Snap-fit lid for Model 3 with flush -Y standing foot and blind 1.20 mm RF radome."""
-    return make_snap_lid(with_vanity_foot=True)
+    """Snap-fit lid for Model 3 with flush -Y standing foot, 1.20 mm radome, and PCB hold-downs."""
+    return make_snap_lid(with_vanity_foot=True, board_x=BOARD_X_VANITY)
 
 
 def make_vanity_dummies() -> dict[str, cq.Workplane]:
