@@ -11,10 +11,11 @@
 class BthomeAdvertiser {
 public:
     // Burst advertisement parameters on occupancy state transitions:
-    // 100 ms interval (160 * 0.625 ms) for 1500 ms (~15 packets across all 3 BLE adv channels)
-    static constexpr uint16_t kBurstAdvIntervalMinUnits = 160;  // 100 ms
-    static constexpr uint16_t kBurstAdvIntervalMaxUnits = 192;  // 120 ms
-    static constexpr int32_t  kBurstDurationMs          = 1500;
+    // 25-35 ms interval (40-56 * 0.625 ms) for 1000 ms (~33 packets across all 3 BLE adv channels)
+    // for instant (< 50 ms BLE air latency) bathroom light-switch responsiveness.
+    static constexpr uint16_t kBurstAdvIntervalMinUnits = 40;   // 25 ms
+    static constexpr uint16_t kBurstAdvIntervalMaxUnits = 56;   // 35 ms
+    static constexpr int32_t  kBurstDurationMs          = 1000;
 
     // Idle background BLE advertising interval between state changes:
     // 2500 ms (4000 * 0.625 ms) keeps average BLE controller draw under ~6 uA

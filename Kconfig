@@ -13,13 +13,22 @@ config APP_HEARTBEAT_INTERVAL_SEC
 	  occupancy edge transitions occur. Occupancy state changes are always
 	  transmitted immediately via a high-priority BLE burst.
 
+config APP_RADAR_POLL_INTERVAL_MS
+	int "Fast UART radar poll interval for sub-second presence & distance updates (ms)"
+	range 100 10000
+	default 400
+	help
+	  Periodic interval in milliseconds at which uart0 wakes briefly (~60 ms at
+	  8.0 Hz radar report rate) to sample HLK-LD2410S presence, motion, and
+	  distance. Enables < 300 ms bathroom light-trigger latency even on 4-wire
+	  hookups where OT2 (P0.17) is not wired.
+
 config APP_OCCUPIED_DISTANCE_POLL_SEC
 	int "Occupied target distance refresh interval (seconds)"
-	default 15
+	range 1 300
+	default 5
 	help
-	  While OT2 remains asserted (room occupied), wake uart0 briefly at this
-	  interval to read the latest target distance from the HLK-LD2410S and
-	  refresh the BTHome v2 advertisement.
+	  Legacy/background seconds-granularity poll interval when OT2 is wired.
 
 config APP_BATTERY_SAMPLE_INTERVAL_SEC
 	int "Battery voltage sampling interval (seconds)"

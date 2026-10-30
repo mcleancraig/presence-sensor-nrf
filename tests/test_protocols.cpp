@@ -69,13 +69,15 @@ static void TestLd2410sCommandBuilders()
     EXPECT_EQ(memcmp(buf, expectedExit, sizeof(expectedExit)), 0, "ExitConfig wire bytes");
 
     // 4. Write Common Parameters (0x0070) for 3 m^3 bathroom -> 48 bytes
+    EXPECT_EQ(Ld2410sProto::kDefaultReportFreqTenthsHz, 80u, "Default report frequency is 8.0 Hz (80 * 0.1 Hz)");
+    EXPECT_EQ(Ld2410sProto::kDefaultResponseSpeedFast, 10u, "Fast response speed preset is 10");
     const Ld2410sConfigParams params = {
-        .farthestGate           = Ld2410sProto::kDefaultBathroomMaxGate,     // 3 (2.10 m)
-        .nearestGate            = Ld2410sProto::kDefaultBathroomMinGate,     // 0 (0.00 m)
-        .unoccupiedHoldSec      = Ld2410sProto::kDefaultBathroomHoldSec,     // 30 s
-        .statusReportFreqHz10   = Ld2410sProto::kDefaultReportFreqTenthsHz,  // 10 (1.0 Hz)
-        .distanceReportFreqHz10 = Ld2410sProto::kDefaultReportFreqTenthsHz,  // 10 (1.0 Hz)
-        .responseSpeed          = Ld2410sProto::kDefaultResponseSpeedNormal, // 5 (Normal)
+        .farthestGate           = Ld2410sProto::kDefaultBathroomMaxGate,   // 3 (2.10 m)
+        .nearestGate            = Ld2410sProto::kDefaultBathroomMinGate,   // 0 (0.00 m)
+        .unoccupiedHoldSec      = Ld2410sProto::kDefaultBathroomHoldSec,   // 30 s
+        .statusReportFreqHz10   = Ld2410sProto::kDefaultReportFreqTenthsHz, // 80 (8.0 Hz)
+        .distanceReportFreqHz10 = Ld2410sProto::kDefaultReportFreqTenthsHz, // 80 (8.0 Hz)
+        .responseSpeed          = Ld2410sProto::kDefaultResponseSpeedFast, // 10 (Fast)
     };
     EXPECT_EQ(Ld2410sProto::BuildWriteCommonParamsCmd(params, buf, 47u), 0u, "WriteCommonParams short buffer");
     const size_t writeLen = Ld2410sProto::BuildWriteCommonParamsCmd(params, buf, sizeof(buf));
@@ -91,6 +93,15 @@ static void TestLd2410sCommandBuilders()
     // Hold 0x0006 = 30 (0x1E)
     EXPECT_EQ(buf[20], 0x06u, "Param 2 ID lo (hold time)");
     EXPECT_EQ(buf[22], 30u, "Param 2 value (30 s)");
+    // Status report freq 0x0002 = 80 (0x50 = 8.0 Hz)
+    EXPECT_EQ(buf[26], 0x02u, "Param 3 ID lo (status report freq)");
+    EXPECT_EQ(buf[28], 80u, "Param 3 value (80 = 8.0 Hz)");
+    // Distance report freq 0x000C = 80 (0x50 = 8.0 Hz)
+    EXPECT_EQ(buf[32], 0x0Cu, "Param 4 ID lo (distance report freq)");
+    EXPECT_EQ(buf[34], 80u, "Param 4 value (80 = 8.0 Hz)");
+    // Response speed 0x000B = 10 (Fast)
+    EXPECT_EQ(buf[38], 0x0Bu, "Param 5 ID lo (response speed)");
+    EXPECT_EQ(buf[40], 10u, "Param 5 value (10 = Fast)");
     EXPECT_EQ(memcmp(&buf[44], Ld2410sProto::kCmdFooter, 4), 0, "WriteCommonParams footer");
 
     // 5. Switch Output Mode (0x007A -> minimal 0x00000000) -> 18 bytes
@@ -113,32 +124,34 @@ static void TestLd2410sParserMinimalAndEdgeCases()
     Ld2410sFrameParser parser;
     Ld2410sParsedFrame frame{};
 
-    // 1. Moving target at 145 cm (1450 mm): 6E 02 91 00 62
-    const uint8_t moving145[5] = {0x6E, 0x02, 0x91, 0x00, 0x62};
+    // 1. Moving target (state 0x03 on HLK-LD2410S) at 145 cm (1450 mm): 6E 03 91 00 62
+    const uint8_t moving145[5] = {0x6E, 0x03, 0x91, 0x00, 0x62};
     for (size_t i = 0; i < 4; ++i) {
         EXPECT_TRUE(!parser.PushByte(moving145[i], &frame), "Partial minimal frame must not emit early");
     }
     EXPECT_TRUE(parser.PushByte(moving145[4], &frame), "Complete minimal moving frame emitted");
     EXPECT_EQ(static_cast<int>(frame.type), static_cast<int>(Ld2410sFrameType::Report), "Frame type Report");
     EXPECT_TRUE(frame.report.isMinimalFrame, "Minimal frame flag");
-    EXPECT_TRUE(frame.report.occupied, "Moving target sets occupied=true");
-    EXPECT_TRUE(frame.report.motion, "Moving target sets motion=true");
+    EXPECT_EQ(static_cast<int>(frame.report.state), static_cast<int>(Ld2410sTargetState::Moving), "State 0x03 == Moving");
+    EXPECT_TRUE(frame.report.occupied, "Moving target (0x03) sets occupied=true");
+    EXPECT_TRUE(frame.report.motion, "Moving target (0x03) sets motion=true");
     EXPECT_EQ(frame.report.distanceCm, 145u, "Distance 145 cm");
     EXPECT_EQ(frame.report.distanceMm, 1450u, "Distance 1450 mm");
 
-    // 2. Stationary target at 110 cm (0x006E — payload byte equals header byte 0x6E!)
+    // 2. Stationary target (state 0x02 on HLK-LD2410S) at 110 cm (0x006E — payload byte equals header byte 0x6E!)
     //    and 98 cm (0x0062 — payload byte equals footer byte 0x62!)
-    const uint8_t still110[5] = {0x6E, 0x03, 0x6E, 0x00, 0x62};
+    const uint8_t still110[5] = {0x6E, 0x02, 0x6E, 0x00, 0x62};
     for (size_t i = 0; i < 4; ++i) {
         EXPECT_TRUE(!parser.PushByte(still110[i], &frame), "Payload byte 0x6E must not reset frame");
     }
     EXPECT_TRUE(parser.PushByte(still110[4], &frame), "Complete 110 cm stationary frame emitted");
-    EXPECT_TRUE(frame.report.occupied, "Stationary target sets occupied=true");
-    EXPECT_TRUE(!frame.report.motion, "Stationary target sets motion=false");
+    EXPECT_EQ(static_cast<int>(frame.report.state), static_cast<int>(Ld2410sTargetState::Stationary), "State 0x02 == Stationary");
+    EXPECT_TRUE(frame.report.occupied, "Stationary target (0x02) sets occupied=true");
+    EXPECT_TRUE(!frame.report.motion, "Stationary target (0x02) sets motion=false");
     EXPECT_EQ(frame.report.distanceCm, 110u, "Distance 110 cm (0x6E)");
     EXPECT_EQ(frame.report.distanceMm, 1100u, "Distance 1100 mm");
 
-    const uint8_t still98[5] = {0x6E, 0x03, 0x62, 0x00, 0x62};
+    const uint8_t still98[5] = {0x6E, 0x02, 0x62, 0x00, 0x62};
     for (size_t i = 0; i < 4; ++i) {
         EXPECT_TRUE(!parser.PushByte(still98[i], &frame), "Payload byte 0x62 at index 2 must not close frame");
     }
@@ -159,7 +172,7 @@ static void TestLd2410sParserMinimalAndEdgeCases()
     EXPECT_TRUE(!frame.report.motion, "Unoccupied sets motion=false");
     EXPECT_EQ(frame.report.distanceMm, 0u, "Unoccupied clamps distanceMm to 0");
 
-    // 4. HLK-LD2410S state=0x01 with distance=0 cm -> Unoccupied; with distance=120 cm -> Moving
+    // 4. HLK-LD2410S state=0x01 -> Unoccupied ("no body"), clamps distanceMm to 0 even if stale distanceCm is present
     const uint8_t clear01Frame[5] = {0x6E, 0x01, 0x00, 0x00, 0x62};
     bool gotClear01 = false;
     for (uint8_t b : clear01Frame) {
@@ -172,17 +185,17 @@ static void TestLd2410sParserMinimalAndEdgeCases()
     EXPECT_TRUE(!frame.report.motion, "State 0x01 with 0 cm sets motion=false");
     EXPECT_EQ(frame.report.distanceMm, 0u, "State 0x01 with 0 cm clamps distanceMm to 0");
 
-    const uint8_t moving01Frame[5] = {0x6E, 0x01, 0x78, 0x00, 0x62};
-    bool gotMoving01 = false;
-    for (uint8_t b : moving01Frame) {
+    const uint8_t clear01StaleDistFrame[5] = {0x6E, 0x01, 0x78, 0x00, 0x62};
+    bool gotClear01Stale = false;
+    for (uint8_t b : clear01StaleDistFrame) {
         if (parser.PushByte(b, &frame)) {
-            gotMoving01 = true;
+            gotClear01Stale = true;
         }
     }
-    EXPECT_TRUE(gotMoving01, "State 0x01 with 120 cm decoded");
-    EXPECT_TRUE(frame.report.occupied, "State 0x01 with 120 cm sets occupied=true");
-    EXPECT_TRUE(frame.report.motion, "State 0x01 with 120 cm sets motion=true");
-    EXPECT_EQ(frame.report.distanceMm, 1200u, "State 0x01 with 120 cm sets distanceMm=1200");
+    EXPECT_TRUE(gotClear01Stale, "State 0x01 with stale distance decoded");
+    EXPECT_TRUE(!frame.report.occupied, "State 0x01 always sets occupied=false");
+    EXPECT_TRUE(!frame.report.motion, "State 0x01 always sets motion=false");
+    EXPECT_EQ(frame.report.distanceMm, 0u, "State 0x01 always clamps distanceMm=0");
 }
 
 static void TestLd2410sParserStandardAndAckWithNoise()
@@ -202,10 +215,10 @@ static void TestLd2410sParserStandardAndAckWithNoise()
         0x04, 0x03, 0x02, 0x01,
         // Inter-frame noise:
         0xF4, 0x00, 0x42,
-        // Standard Report Frame (payload len = 8: type=0x01, state=0x02, dist=185 cm, + 4 energy bytes):
+        // Standard Report Frame (payload len = 8: type=0x01, state=0x03 Moving, dist=185 cm, + 4 energy bytes):
         0xF4, 0xF3, 0xF2, 0xF1,
         0x08, 0x00,
-        0x01, 0x02, 0xB9, 0x00, 0x10, 0x20, 0x30, 0x40,
+        0x01, 0x03, 0xB9, 0x00, 0x10, 0x20, 0x30, 0x40,
         0xF8, 0xF7, 0xF6, 0xF5
     };
 
@@ -222,7 +235,7 @@ static void TestLd2410sParserStandardAndAckWithNoise()
                 ++reportCount;
                 EXPECT_TRUE(!frame.report.isMinimalFrame, "Standard report frame flag");
                 EXPECT_TRUE(frame.report.occupied, "Standard report occupied");
-                EXPECT_TRUE(frame.report.motion, "Standard report motion");
+                EXPECT_TRUE(frame.report.motion, "Standard report motion (0x03)");
                 EXPECT_EQ(frame.report.distanceCm, 185u, "Standard report 185 cm");
                 EXPECT_EQ(frame.report.distanceMm, 1850u, "Standard report 1850 mm");
             }
@@ -232,7 +245,7 @@ static void TestLd2410sParserStandardAndAckWithNoise()
     EXPECT_EQ(ackCount, 1, "Decoded exactly 1 ACK frame across noisy stream");
     EXPECT_EQ(reportCount, 1, "Decoded exactly 1 Standard Report frame across noisy stream");
 
-    // Full 80-byte HLK-LD2410S Standard Output Frame (payloadLen = 70: 1B type + 1B state + 2B dist + 2B res + 64B gates)
+    // Full 80-byte HLK-LD2410S Standard Output Frame (payloadLen = 70: 1B type + 1B state=0x03 Moving + 2B dist + 2B res + 64B gates)
     uint8_t fullStdFrame[80] = {};
     fullStdFrame[0] = 0xF4;
     fullStdFrame[1] = 0xF3;
@@ -241,7 +254,7 @@ static void TestLd2410sParserStandardAndAckWithNoise()
     fullStdFrame[4] = 70u; // 0x46 payload length
     fullStdFrame[5] = 0x00;
     fullStdFrame[6] = 0x01; // Target report type
-    fullStdFrame[7] = 0x02; // Moving
+    fullStdFrame[7] = 0x03; // Moving (0x03)
     fullStdFrame[8] = 135u; // 135 cm (1350 mm)
     fullStdFrame[9] = 0x00;
     fullStdFrame[76] = 0xF8;
@@ -257,7 +270,7 @@ static void TestLd2410sParserStandardAndAckWithNoise()
     }
     EXPECT_TRUE(gotFullStd, "Decoded full 80-byte (70B payload) HLK-LD2410S standard frame");
     EXPECT_TRUE(frame.report.occupied, "80-byte standard frame occupied=true");
-    EXPECT_TRUE(frame.report.motion, "80-byte standard frame motion=true");
+    EXPECT_TRUE(frame.report.motion, "80-byte standard frame motion=true (state 0x03)");
     EXPECT_EQ(frame.report.distanceMm, 1350u, "80-byte standard frame distanceMm=1350");
 }
 

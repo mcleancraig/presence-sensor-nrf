@@ -14,11 +14,13 @@ class SensorLd2410s {
 public:
     using Ot2EdgeCallback = void (*)();
 
-    // Bounded UART wake window when sampling target distance
-    // (1150 ms spans a full 1.0 Hz report period + 150 ms margin while returning
-    // and suspending uart0 immediately upon receiving the first valid report frame)
-    static constexpr uint32_t kDefaultSampleTimeoutMs = 1150;
-    static constexpr uint32_t kAckTimeoutMs           = 500;
+    // Bounded UART wake window when sampling target distance:
+    // At 8.0 Hz (125 ms frame period), 220 ms spans ~1.75 frame intervals
+    // (~62 ms average wake time) while returning and suspending uart0 immediately
+    // upon receiving the first valid 5-byte report frame.
+    static constexpr uint32_t kDefaultSampleTimeoutMs  = 220;
+    static constexpr uint32_t kFallbackSampleTimeoutMs = 1150;
+    static constexpr uint32_t kAckTimeoutMs            = 500;
     static constexpr uint32_t kRadarBootSettleMs      = 1000;
     static constexpr uint32_t kPinSwapProbeSettleMs   = 500;
     static constexpr uint32_t kInterCommandDelayMs    = 50;
@@ -58,6 +60,11 @@ public:
      */
     bool IsRadarConfigured() const { return mRadarConfigured; }
 
+    /**
+     * @brief Query whether the hardware OT2 pin (P0.17) has ever asserted HIGH or fired an edge ISR.
+     */
+    bool IsOt2SignalSeen() const { return mOt2SignalSeen; }
+
 private:
     static void OnOt2GpioIsr(const struct device *port, struct gpio_callback *cb, uint32_t pins);
     static void OnUartIsr(const struct device *dev, void *userData);
@@ -88,4 +95,5 @@ private:
     bool                    mSwapRxTxPins;
     bool                    mUartSuspended;
     bool                    mRadarConfigured;
+    volatile bool           mOt2SignalSeen;
 };

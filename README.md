@@ -15,8 +15,8 @@ Ultra-low-power 24 GHz mmWave Human Presence, Motion, Distance, and Battery Sens
 - **Power Source**: Single Li-ion cell (`3.0 V - 4.2 V`) feeding the SuperMini `B+`/`B-` pads (`VDDH`).
 - **Continuous Radar Power (`P0.13` Switched VCC)**: Unlike one-shot I2C sensors, the HLK-LD2410S executes an internal 1 Hz / 8 Hz FMCW chirp state machine and maintains adaptive environmental noise baselines. Its `3V3` input (`J2 Pin 1`) is powered from the SuperMini's switched `VCC` header pin (`P0.13` HIGH continuously during normal operation) so the onboard 3.3 V LDO regulates the raw cell voltage (`3.0 V - 4.2 V`) down to a clean `3.3 V` within the radar's `3.6 V` absolute maximum limit.
 - **Interrupt-Driven Wake & UARTE0 Runtime Suspend**:
-  - `P0.17` (`017` / `D2`, `OT2` GPIO interrupt, `GPIO_INT_EDGE_BOTH`) wakes the nRF52840 from `< 3 µA` System ON Idle immediately when a person enters or leaves the bathroom.
-  - `uart0` (`115200` baud, 8N1 on `P0.08` / `008` / `D0` RX and `P0.06` / `006` / `D1` TX) uses interrupt-driven RX (`CONFIG_UART_INTERRUPT_DRIVEN=y`) with a lock-free ISR ring buffer and is suspended via `pm_device_action_run(uart_dev, PM_DEVICE_ACTION_SUSPEND)` whenever idle, releasing the nRF52840 64 MHz HFCLK and EasyDMA (~`500 µA` savings) and resuming only on `OT2` edges or periodic radar polls (`5 s` via `CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC`).
+  - `P0.17` (`017` / `D2`, `OT2` GPIO interrupt, `GPIO_INT_EDGE_BOTH`) wakes the nRF52840 from `< 3 µA` System ON Idle immediately (`< 5 ms` instant BLE broadcast) when a person enters or leaves the bathroom.
+  - `uart0` (`115200` baud, 8N1 on `P0.08` / `008` / `D0` RX and `P0.06` / `006` / `D1` TX) uses interrupt-driven RX (`CONFIG_UART_INTERRUPT_DRIVEN=y`) with a lock-free ISR ring buffer and is suspended via `pm_device_action_run(uart_dev, PM_DEVICE_ACTION_SUSPEND)` whenever idle, releasing the nRF52840 64 MHz HFCLK and EasyDMA (~`500 µA` savings) and resuming only on `OT2` edges or brief sub-second radar polls (`400 ms` via `CONFIG_APP_RADAR_POLL_INTERVAL_MS`, averaging only `~62 ms` wake time per `8.0 Hz` radar frame).
 - **Low-Voltage Cutoff**: At `<= 3.0 V` (confirmed across 8 averaged readings over 2 s in `BatteryMonitor::ReadBatteryStatus()`), `P0.13` (`VCC`) is driven LOW to disconnect the HLK-LD2410S rail and the nRF52840 enters System OFF (`sys_poweroff()`).
 
 ### Pinout, Header Geometry & Enclosure Orientation
@@ -67,29 +67,30 @@ Object IDs are encoded in **strictly ascending numerical order** per the BTHome 
 
 **Primary Advertising PDU Size**: `3` bytes (Flags AD structure) + `19` bytes (Service Data AD structure) = **`22` bytes** (well within the `31`-byte BLE legacy advertising limit).
 
-### Advertising Cadence
+### Advertising Cadence & Sub-Second Lighting Latency
 
-- **Immediate State-Change Burst**: On any occupancy/motion transition (`OT2` interrupt or UART target-state change) or `>= 100 mm` distance shift while occupied, the broadcaster enters a **100 ms advertising burst for 1.5 s** (~15 packets) with a newly incremented Packet ID so Home Assistant triggers bathroom lighting/automation within `< 150 ms`.
+- **Immediate State-Change Burst (`25–35 ms` Interval)**: On any occupancy/motion transition (`OT2` interrupt or UART target-state change) or `>= 100 mm` distance shift while occupied, the broadcaster enters a **25–35 ms high-density advertising burst for 1.0 s** (~33 BLE packets) with a newly incremented Packet ID so Home Assistant triggers bathroom lighting/automation within `< 50 ms` of detection.
+- **Instant `OT2` Rising-Edge Fast-Path (`< 5 ms`)**: When `OT2` (`Pin 5 -> P0.17`) is wired, a rising edge broadcasts `Occupancy = Detected` and `Motion = Detected` over BLE **immediately (`< 5 ms`) before** waking `uart0` to sample exact millimeter distance.
+- **Sub-Second 4-Wire UART Polling (`400 ms` / `8.0 Hz`)**: Even in a 4-wire setup without `OT2` connected (`3V3`, `GND`, `OT1`, `RX`), `uart0` wakes every **`400 ms`** (`CONFIG_APP_RADAR_POLL_INTERVAL_MS`) for an average of **`~62 ms`** (`220 ms` max timeout at `8.0 Hz` radar reporting) to sample target state (`0x00`/`0x01` Clear, `0x02` Stationary, `0x03` Moving) and millimeter distance before immediately re-suspending `uart0`.
 - **Steady-State Idle Broadcast**: Between events, the advertising interval relaxes to **2.5 s** (`2500 ms`), keeping average BLE radio current at ~`7 µA`, with a periodic state refresh every `60 s` (`CONFIG_APP_HEARTBEAT_INTERVAL_SEC`).
-- **Periodic Radar UART Poll**: `uart0` wakes briefly every `5 s` (`CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC`) via interrupt-driven EasyDMA/ISR RX (`CONFIG_UART_INTERRUPT_DRIVEN=y`) for up to `1150 ms` (`SensorLd2410s::kDefaultSampleTimeoutMs`) to read the next `1.0 Hz` target distance and occupancy/motion frame from the HLK-LD2410S (handling both 5-byte Minimal `0x6E...0x62` and 12/80-byte Standard `F4 F3 F2 F1 ... F8 F7 F6 F5` output frames) before immediately re-suspending `uart0`.
 - **Battery Refresh**: SAADC `VDDH/5` is sampled at boot and every `6 hours` (`21600 s`, `CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC`).
 
 ---
 
 ## 3. Bathroom Radar Tuning (3 m³ Volume)
 
-At boot, the firmware configures the HLK-LD2410S over `uart0` (`115200` baud on `P0.08` RX / `P0.06` TX) for a compact **3 m³ bathroom** (~`1.5 m × 1.5 m × 2.2 m`) and switches the radar to its **Minimal 5-Byte Output Format** (`6E [state] [dist_lo] [dist_hi] 62`):
+At boot, the firmware configures the HLK-LD2410S over `uart0` (`115200` baud on `P0.08` RX / `P0.06` TX) for a compact **3 m³ bathroom** (~`1.5 m × 1.5 m × 2.2 m`) and switches the radar to its **Minimal 5-Byte Output Format** (`6E [state] [dist_lo] [dist_hi] 62`, where `state = 0x00/0x01` Unoccupied, `0x02` Stationary presence, `0x03` Moving presence):
 
 | Parameter (Command `0x0070`) | Kconfig / Constant | Default Value | Setting | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
 | **Farthest Detection Gate** | `CONFIG_APP_RADAR_MAX_GATE` | `3` | `2.10 m` (`3 × 0.70 m`) | Rejects ghost reflections through bathroom walls or doors beyond `2.10 m` |
 | **Nearest Detection Gate** | `CONFIG_APP_RADAR_MIN_GATE` | `0` | `0.00 m` | Detects presence right up to the sensor enclosure |
 | **Unmanned Delay / Hold Time** | `CONFIG_APP_RADAR_HOLD_S` | `30` | `30 s` | Holds presence across brief motionless intervals without keeping lights on long after exit |
-| **Status Report Frequency** | `kDefaultReportFreqTenthsHz` | `10` | `1.0 Hz` (`10 × 0.1 Hz`) | Enables HLK-LD2410S low-speed sleep mode (~`58 - 100 µA`) |
-| **Distance Report Frequency** | `kDefaultReportFreqTenthsHz` | `10` | `1.0 Hz` (`10 × 0.1 Hz`) | Matches 1 Hz low-power cadence |
-| **Response Speed** | `kDefaultResponseSpeedNormal` | `5` | Normal (`5`) | Fast entry detection (~`0.5 - 1.0 s`) with low false-trigger rate |
+| **Status Report Frequency** | `kDefaultReportFreqTenthsHz` | `80` | `8.0 Hz` (`80 × 0.1 Hz`, `125 ms`) | Sub-second bathroom lighting response and `~62 ms` average UART wake window |
+| **Distance Report Frequency** | `kDefaultReportFreqTenthsHz` | `80` | `8.0 Hz` (`80 × 0.1 Hz`, `125 ms`) | Matches `8.0 Hz` (`125 ms`) frame cadence |
+| **Response Speed** | `kDefaultResponseSpeedFast` | `10` | Fast (`10`) | Instant entry detection (`< 200 ms`) for bathroom lighting automation |
 
-Gate and hold parameters are tunable via Kconfig (`CONFIG_APP_RADAR_MAX_GATE`, `CONFIG_APP_RADAR_MIN_GATE`, `CONFIG_APP_RADAR_HOLD_S`, `CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC` in `Kconfig`).
+Gate, hold, and poll parameters are tunable via Kconfig (`CONFIG_APP_RADAR_MAX_GATE`, `CONFIG_APP_RADAR_MIN_GATE`, `CONFIG_APP_RADAR_HOLD_S`, `CONFIG_APP_RADAR_POLL_INTERVAL_MS` in `Kconfig`).
 
 ---
 

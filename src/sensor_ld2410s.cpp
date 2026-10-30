@@ -58,7 +58,8 @@ SensorLd2410s::SensorLd2410s()
       mHasBootReport(false),
       mSwapRxTxPins(false),
       mUartSuspended(false),
-      mRadarConfigured(false)
+      mRadarConfigured(false),
+      mOt2SignalSeen(false)
 {
 }
 
@@ -67,6 +68,7 @@ void SensorLd2410s::OnOt2GpioIsr(const struct device *port, struct gpio_callback
     ARG_UNUSED(port);
     ARG_UNUSED(pins);
     SensorLd2410s *self = CONTAINER_OF(cb, SensorLd2410s, mOt2CbData);
+    self->mOt2SignalSeen = true;
     if (self->mEdgeCallback) {
         self->mEdgeCallback();
     }
@@ -311,7 +313,7 @@ int SensorLd2410s::ConfigureRadarParameters()
         .unoccupiedHoldSec      = static_cast<uint32_t>(CONFIG_APP_RADAR_HOLD_S),
         .statusReportFreqHz10   = Ld2410sProto::kDefaultReportFreqTenthsHz,
         .distanceReportFreqHz10 = Ld2410sProto::kDefaultReportFreqTenthsHz,
-        .responseSpeed          = Ld2410sProto::kDefaultResponseSpeedNormal,
+        .responseSpeed          = Ld2410sProto::kDefaultResponseSpeedFast,
     };
 
     const size_t writeLen = Ld2410sProto::BuildWriteCommonParamsCmd(params, cmdBuf, sizeof(cmdBuf));
@@ -337,7 +339,7 @@ int SensorLd2410s::ConfigureRadarParameters()
     }
 
     mRadarConfigured = true;
-    LOG_INF("HLK-LD2410S configured (max_gate=%d [%.1f m], min_gate=%d, hold=%d s, minimal 5B output)",
+    LOG_INF("HLK-LD2410S configured (max_gate=%d [%.1f m], min_gate=%d, hold=%d s, 8.0 Hz fast, minimal 5B output)",
             CONFIG_APP_RADAR_MAX_GATE,
             static_cast<double>(CONFIG_APP_RADAR_MAX_GATE) * 0.7,
             CONFIG_APP_RADAR_MIN_GATE,
@@ -430,6 +432,12 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
     }
 
     const bool pinOccupied = ReadPinOccupancy();
+    if (pinOccupied) {
+        mOt2SignalSeen = true;
+    }
+
+    const uint32_t effectiveTimeoutMs =
+        (!mRadarConfigured && timeoutMs < kFallbackSampleTimeoutMs) ? kFallbackSampleTimeoutMs : timeoutMs;
 
     // Flush stale ring-buffer bytes BEFORE waking UART0 so no incoming byte
     // received immediately after ResumeUart() is discarded.
@@ -440,7 +448,7 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
     auto suspendCb = [](void *ctx) -> int { return static_cast<SensorLd2410s *>(ctx)->SuspendUart(); };
     ScopedUartWake uartWake(resumeCb, suspendCb, this);
 
-    const int64_t deadline = k_uptime_get() + static_cast<int64_t>(timeoutMs);
+    const int64_t deadline = k_uptime_get() + static_cast<int64_t>(effectiveTimeoutMs);
     while (true) {
         uint8_t rxByte = 0;
         while (PopRxByte(&rxByte)) {

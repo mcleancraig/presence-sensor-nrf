@@ -94,6 +94,17 @@ void AppTask::PublishCurrentState(bool burst)
 
 void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
 {
+    // Fast-path for 5-wire setups (OT2 -> P0.17): on a rising OT2 hardware interrupt
+    // when transitioning from unoccupied -> occupied, broadcast occupancy=true over BLE
+    // immediately (< 5 ms) BEFORE waking UART0 to read exact target distance!
+    if (forceBurst && !mLastOccupied && mRadar.ReadPinOccupancy()) {
+        mLastOccupied              = true;
+        mLastMotion                = true;
+        mLastRadarReport.occupied  = true;
+        mLastRadarReport.motion    = true;
+        PublishCurrentState(true);
+    }
+
     Ld2410sReport report{};
     mRadar.SampleTargetReport(&report);
     mLastRadarReport = report;
@@ -162,10 +173,10 @@ int AppTask::Start()
     // 4. Perform initial radar sample and broadcast updated burst advertisement
     HandleOt2AndDistanceUpdate(true, true);
 
-    // 5. Start periodic low-power timers (5 s radar UART poll + 60 s heartbeat + 6 h battery)
+    // 5. Start periodic low-power timers (400 ms sub-second radar UART poll + heartbeat + battery)
     k_timer_start(&mOccupiedPollTimer,
-                  K_SECONDS(CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC),
-                  K_SECONDS(CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC));
+                  K_MSEC(CONFIG_APP_RADAR_POLL_INTERVAL_MS),
+                  K_MSEC(CONFIG_APP_RADAR_POLL_INTERVAL_MS));
     k_timer_start(&mHeartbeatTimer,
                   K_SECONDS(CONFIG_APP_HEARTBEAT_INTERVAL_SEC),
                   K_SECONDS(CONFIG_APP_HEARTBEAT_INTERVAL_SEC));
@@ -173,8 +184,8 @@ int AppTask::Start()
                   K_SECONDS(CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC),
                   K_SECONDS(CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC));
 
-    LOG_INF("Entering System ON low-power event loop (poll=%ds, heartbeat=%ds, battery=%ds)",
-            CONFIG_APP_OCCUPIED_DISTANCE_POLL_SEC,
+    LOG_INF("Entering System ON low-power event loop (poll=%dms, heartbeat=%ds, battery=%ds)",
+            CONFIG_APP_RADAR_POLL_INTERVAL_MS,
             CONFIG_APP_HEARTBEAT_INTERVAL_SEC,
             CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC);
 

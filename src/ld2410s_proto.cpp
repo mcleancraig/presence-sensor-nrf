@@ -51,26 +51,17 @@ static void PopulateReportFromRaw(uint8_t rawState,
         occupied = false;
         motion   = false;
     } else if (rawState == 0x01u) {
-        // Across HLK-LD2410S firmware revisions:
-        //   - 0x01 with distanceCm == 0 means Unoccupied ("no body")
-        //   - 0x01 with distanceCm > 0 means Moving target
-        if (distCm == 0u) {
-            state    = Ld2410sTargetState::Unoccupied;
-            occupied = false;
-            motion   = false;
-        } else {
-            state    = Ld2410sTargetState::Moving;
-            occupied = true;
-            motion   = true;
-        }
+        state    = Ld2410sTargetState::Unoccupied;
+        occupied = false;
+        motion   = false;
     } else if (rawState == 0x02u) {
-        state    = Ld2410sTargetState::Moving;
-        occupied = true;
-        motion   = true;
-    } else {
         state    = Ld2410sTargetState::Stationary;
         occupied = true;
         motion   = false;
+    } else {
+        state    = Ld2410sTargetState::Moving;
+        occupied = true;
+        motion   = true;
     }
 
     outFrame->type                  = Ld2410sFrameType::Report;
@@ -204,7 +195,7 @@ bool Ld2410sFrameParser::TryParseBuffer(Ld2410sParsedFrame *outFrame)
 
         // 1. Minimal 5-Byte Report Frame: 6E [state] [dist_lo] [dist_hi] 62
         if (first == kMinimalHeader) {
-            if (mLen >= 2 && mBuf[1] > static_cast<uint8_t>(Ld2410sTargetState::Stationary)) {
+            if (mLen >= 2 && mBuf[1] > static_cast<uint8_t>(Ld2410sTargetState::Moving)) {
                 DiscardPrefix(1);
                 continue;
             }
@@ -212,7 +203,7 @@ bool Ld2410sFrameParser::TryParseBuffer(Ld2410sParsedFrame *outFrame)
                 return false; // Wait for remaining bytes
             }
             if (mBuf[4] == kMinimalFooter &&
-                mBuf[1] <= static_cast<uint8_t>(Ld2410sTargetState::Stationary)) {
+                mBuf[1] <= static_cast<uint8_t>(Ld2410sTargetState::Moving)) {
                 const uint8_t rawState = mBuf[1];
                 const uint16_t distCm  = ReadU16Le(&mBuf[2]);
 
@@ -258,7 +249,7 @@ bool Ld2410sFrameParser::TryParseBuffer(Ld2410sParsedFrame *outFrame)
                     payloadLen != 3u &&
                     payloadLen != 69u &&
                     (mBuf[6] == 0x01u || mBuf[6] == 0x02u) &&
-                    mBuf[7] <= static_cast<uint8_t>(Ld2410sTargetState::Stationary)) {
+                    mBuf[7] <= static_cast<uint8_t>(Ld2410sTargetState::Moving)) {
                     const uint8_t rawState = mBuf[7];
                     const uint16_t distCm  = ReadU16Le(&mBuf[8]);
 
@@ -267,7 +258,7 @@ bool Ld2410sFrameParser::TryParseBuffer(Ld2410sParsedFrame *outFrame)
                     return true;
                 }
                 // Layout B: [state] [dist_lo] [dist_hi] ... (e.g. 3-byte or 69-byte payload without type prefix)
-                if (mBuf[6] <= static_cast<uint8_t>(Ld2410sTargetState::Stationary)) {
+                if (mBuf[6] <= static_cast<uint8_t>(Ld2410sTargetState::Moving)) {
                     const uint8_t rawState = mBuf[6];
                     const uint16_t distCm  = ReadU16Le(&mBuf[7]);
 

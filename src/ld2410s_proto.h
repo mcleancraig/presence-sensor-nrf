@@ -11,16 +11,16 @@
 enum class Ld2410sTargetState : uint8_t {
     NoTarget   = 0x00,
     Unoccupied = 0x01,
-    Moving     = 0x02,
-    Stationary = 0x03,
+    Stationary = 0x02,
+    Moving     = 0x03,
 };
 
 struct Ld2410sConfigParams {
     uint32_t farthestGate;       // 1..16 (0.70 m per gate; 3 = 2.10 m for 3 m^3 bathroom)
     uint32_t nearestGate;        // 0..15 (0 = 0.00 m)
     uint32_t unoccupiedHoldSec;  // 10..120 seconds (default 30 s)
-    uint32_t statusReportFreqHz10;   // 5..80 in 0.1 Hz units (10 = 1.0 Hz)
-    uint32_t distanceReportFreqHz10; // 5..80 in 0.1 Hz units (10 = 1.0 Hz)
+    uint32_t statusReportFreqHz10;   // 5..80 in 0.1 Hz units (80 = 8.0 Hz / 125 ms)
+    uint32_t distanceReportFreqHz10; // 5..80 in 0.1 Hz units (80 = 8.0 Hz / 125 ms)
     uint32_t responseSpeed;      // 5 = Normal, 10 = Fast
 };
 
@@ -85,8 +85,9 @@ static constexpr uint32_t kOutputModeStandard = 0x00000001u;
 static constexpr uint32_t kDefaultBathroomMaxGate     = 3u;  // 2.10 m
 static constexpr uint32_t kDefaultBathroomMinGate     = 0u;  // 0.00 m
 static constexpr uint32_t kDefaultBathroomHoldSec     = 30u; // 30 s
-static constexpr uint32_t kDefaultReportFreqTenthsHz  = 10u; // 1.0 Hz
+static constexpr uint32_t kDefaultReportFreqTenthsHz  = 80u; // 8.0 Hz (125 ms frame interval)
 static constexpr uint32_t kDefaultResponseSpeedNormal = 5u;  // Normal
+static constexpr uint32_t kDefaultResponseSpeedFast   = 10u; // Fast (instant light-switch response)
 
 // Exact serialized command frame sizes
 static constexpr size_t kEnterConfigFrameSize       = 14;
