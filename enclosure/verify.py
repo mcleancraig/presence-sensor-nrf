@@ -86,6 +86,17 @@ def main() -> int:
 
     reach = e.DIMPLE_H + e.CAP_RISE - (e.SLOT_T - e.PLATE_T) - e.BLOCK_LIP
     print(f"ok   + contact reaches {reach:.2f} mm past the lip face (must be >= 0.30 mm)")
+    rim_probe_x = e.box(10.0, 2.0, e.RIM_H * 0.8, e.INNER_L / 2 + e.GROOVE_OFFSET, 0.0, e.H - e.RIM_H * 0.9)
+    rim_bb = lid.intersect(rim_probe_x).val().BoundingBox()
+    groove_xmin = e.INNER_L / 2 + e.GROOVE_OFFSET - e.GROOVE_W / 2
+    groove_xmax = e.INNER_L / 2 + e.GROOVE_OFFSET + e.GROOVE_W / 2
+    ok_rim = groove_xmin + 0.15 <= rim_bb.xmin and rim_bb.xmax <= groove_xmax - 0.15
+    print(
+        f"ok   lid embossed rim X=[{rim_bb.xmin:.2f}..{rim_bb.xmax:.2f}] mm mates inside "
+        f"base debossed groove X=[{groove_xmin:.2f}..{groove_xmax:.2f}] mm"
+    )
+    if not ok_rim:
+        failures.append(f"lid embossed rim X=[{rim_bb.xmin:.2f}..{rim_bb.xmax:.2f}] outside base groove")
     rad_probe = cq.Workplane("XY").box(1.0, 1.0, 100.0).translate((e.RADAR_X, e.Y_RADAR, 0.0))
     for l_name, l_wp in [("lid", lid), ("corner_lid", c_lid), ("vanity_lid", v_lid)]:
         r_bb = l_wp.intersect(rad_probe).val().BoundingBox()

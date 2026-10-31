@@ -27,7 +27,7 @@ All three enclosure variants share the same verified, wall-joined internal archi
 
 ### Model 1: Sealed Gasketed Wall-Mount (`base.stl`, `lid.stl`)
 - **Outer Envelope**: `118.8 × 76.1 × 29.4 mm` (`82.0 × 48.0 × 24.0 mm` interior cavity).
-- **Ingress Protection**: Continuous `2.2 × 1.5 mm` gasket groove (`GROOVE_OFFSET = 3.6 mm`) for `2 mm` EPDM/silicone O-ring cord or printed TPU gasket, compressed by 4× `M3 × 8 mm` stainless screws into `M3 × 5.7 × 4.6 mm` heat-set inserts (`SCREW_OFFSET = 6.4 mm`) located outside the sealed cavity.
+- **Tongue-and-Groove Rim & Ingress Protection**: Continuous `2.20 × 1.50 mm` debossed perimeter groove in `base.stl` (`GROOVE_OFFSET = 3.60 mm`, `89.20 × 55.20 mm` centerline, `R = 4.00 mm`) mated directly by a concentric **`1.80 × 1.25 mm` embossed tongue rim on `lid.stl`** (`RIM_CLEAR = 0.20 mm` radial slip-fit clearance per side, `RIM_Z_CLEAR = 0.25 mm` bottom clearance so the lid flange seats flush at `Z = 26.40 mm`), compressed by 4× `M3 × 8 mm` stainless screws into `M3 × 5.7 × 4.6 mm` heat-set inserts (`SCREW_OFFSET = 6.4 mm`) located outside the sealed cavity.
 - **Mounting**: Two `4.0 mm` thick `±X` wall-mount tabs with `Ø4.5 mm` clearance holes at `X = ±54.9 mm`.
 
 ### Model 2: Angled 45° Corner / Ceiling Snap-Fit (`corner_base.stl`, `corner_lid.stl`, `corner_bracket.stl`)

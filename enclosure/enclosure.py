@@ -120,9 +120,13 @@ DUPONT_5P_H = 16.5          # 14.0 mm female DuPont housing + 2.5 mm wire bend b
 RADAR_J2_BELOW_H = DUPONT_5P_H
 RADAR_SNAP_OVERHANG = 0.45  # inward snap-lip catch overhang on +/-Y radar cradle walls
 
-# Steam-proof lid with blind 1.2 mm RF radome pocket and PCB hold-down bosses
+# Steam-proof lid with embossed rim mating into base debossed groove, blind 1.2 mm RF radome & hold-downs
 LID_T = 3.0
-LIP_CLEAR = 0.3             # locating lip clearance to the cavity wall
+RIM_CLEAR = 0.20            # radial slip-fit clearance per side inside base debossed groove (2.20 -> 1.80 mm)
+RIM_Z_CLEAR = 0.25          # vertical bottom clearance inside 1.50 mm deep base groove (1.25 mm tongue height)
+RIM_W = GROOVE_W - 2 * RIM_CLEAR
+RIM_H = GROOVE_D - RIM_Z_CLEAR
+LIP_CLEAR = 0.3             # snap-fit lip clearance preserved for flangeless Model 2/3 variants
 LIP_T = 1.6
 LIP_H = 2.0
 RADOME_L = 22.0             # blind interior pocket length over 20x20 mm HLK-LD2410S
@@ -356,6 +360,8 @@ def check() -> None:
     arc_c = GROOVE_OFFSET - GROOVE_R
     gap = 2 ** 0.5 * (SCREW_OFFSET - arc_c) - GROOVE_R - GROOVE_W / 2 - INSERT_D / 2
     assert gap >= 1.0, f"gasket groove only {gap:.2f} mm from an insert hole"
+    assert 0.3 <= GROOVE_W - RIM_W <= 0.6, "lid embossed rim must have 0.15..0.30 mm clearance/side in base groove"
+    assert 0.15 <= GROOVE_D - RIM_H <= 0.5, "lid embossed rim must not bottom out in base debossed groove"
     assert 0.8 <= RADOME_T <= 1.6, f"radome thickness {RADOME_T:.2f} mm outside 0.8..1.6 mm range"
     assert RADOME_L >= RADAR_L and RADOME_W >= RADAR_W, "radome pocket smaller than radar PCB"
     assert abs(RADAR_X) + RADOME_L / 2 < INNER_L / 2 - LIP_CLEAR - LIP_T, "radome pocket hits lid lip (X)"
@@ -421,10 +427,13 @@ def make_base() -> cq.Workplane:
 
 def make_lid() -> cq.Workplane:
     lid = rrect(FL_L, FL_W, FLANGE_R, H, LID_T)
-    lip_l, lip_w = INNER_L - 2 * LIP_CLEAR, INNER_W - 2 * LIP_CLEAR
-    lip = (rrect(lip_l, lip_w, max(INNER_R - LIP_CLEAR, 0.5), H - LIP_H, LIP_H)
-           .cut(rrect(lip_l - 2 * LIP_T, lip_w - 2 * LIP_T, 0.5, H - LIP_H - 1, LIP_H + 2)))
-    lid = lid.union(lip)
+    rim_out = rrect(INNER_L + 2 * (GROOVE_OFFSET + RIM_W / 2),
+                    INNER_W + 2 * (GROOVE_OFFSET + RIM_W / 2),
+                    GROOVE_R + RIM_W / 2, H - RIM_H, RIM_H)
+    rim_in = rrect(INNER_L + 2 * (GROOVE_OFFSET - RIM_W / 2),
+                   INNER_W + 2 * (GROOVE_OFFSET - RIM_W / 2),
+                   GROOVE_R - RIM_W / 2, H - RIM_H - 1, RIM_H + 2)
+    lid = lid.union(rim_out.cut(rim_in))
     for x, y in SCREW_PTS:
         lid = lid.cut(cq.Workplane("XY").workplane(offset=H - 1).center(x, y)
                       .circle(SCREW_CLEAR_D / 2).extrude(LID_T + 2))
