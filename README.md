@@ -43,7 +43,7 @@ The HLK-LD2410S `J2` 5-pin header (`3V3`, `GND`, `OT1`, `RX`, `OT2`) uses a stan
 
 ## 2. BTHome v2 BLE Advertising Format
 
-The sensor operates as a **non-connectable, scannable BLE broadcaster** using the official **BTHome v2** service UUID (`0xFCD2`). Home Assistant auto-discovers it natively via local Bluetooth adapters or **ESPHome Bluetooth Proxies** with zero pairing codes or cloud dependencies.
+The sensor operates as a **non-connectable, scannable BLE broadcaster** using the official **BTHome v2** service UUID (`0xFCD2`) at the nRF52840's maximum **`+8 dBm` (`6.3 mW`) transmit power** (`CONFIG_BT_CTLR_TX_PWR_PLUS_8=y`). Home Assistant auto-discovers it natively via local Bluetooth adapters or **ESPHome Bluetooth Proxies** with zero pairing codes or cloud dependencies.
 
 ### Device Identity
 
@@ -174,7 +174,7 @@ scripts/fetch-firmware.sh --debug   # USB CDC ACM debug build
 | :--- | :--- |
 | **HLK-LD2410S** (Low-power mode via `P0.13` 3.3 V rail; `8.0 Hz` fast response) | `58 – 120 µA` |
 | **nRF52840 System ON Idle** (RTC + RAM retention + GPIOTE `PORT` event on `P0.17`) | `~3 µA` |
-| **BLE Non-Connectable Scannable Advertising** (2.5 s idle + `25–35 ms` `1.0 s` event bursts) | `~7 µA` |
+| **BLE Non-Connectable Scannable Advertising** (`+8 dBm` TX via `CONFIG_BT_CTLR_TX_PWR_PLUS_8=y`; `1.5 s` idle + `25–35 ms` `3.0 s` event bursts) | `~7 – 12 µA` |
 | **Brief `uart0` Wake Windows** (`OT2`-gated in 5-wire mode; `~62 ms` every `400 ms` while occupied/4-wire) | `~3 – 75 µA` |
 | **6-Hour SAADC `VDDH/5` Battery Sample** (one-shot, 16× oversampling) | `< 0.1 µA` |
 | **SuperMini Quiescent / Diode Leakage** (batch-dependent) | `4 – 60 µA` |
