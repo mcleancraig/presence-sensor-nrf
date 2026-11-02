@@ -10,6 +10,7 @@ OUT_BIN="tests/test_protocols"
 "$CXX" -std=c++20 -Wall -Wextra -Werror -O2 \
     src/ld2410s_proto.cpp \
     src/bthome_proto.cpp \
+    src/ha_mqtt_proto.cpp \
     tests/test_protocols.cpp \
     -o "$OUT_BIN"
 

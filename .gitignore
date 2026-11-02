@@ -35,3 +35,7 @@ compile_commands.json
 
 # Enclosure tooling
 enclosure/.venv/
+
+# Local Thread / MQTT credentials (gitignored — Zero Secrets Invariant)
+local.conf
+secrets.conf

@@ -85,7 +85,7 @@ void AppTask::SampleBattery()
 void AppTask::PublishCurrentState(bool burst)
 {
     const BthomeMeasurement m = {
-        .packetId   = 0, // Auto-incremented inside BthomeAdvertiser::Publish
+        .packetId   = 0, // Auto-incremented inside ThreadMqttPublisher::Publish
         .batteryPct = mBatteryStatus.percentRemaining,
         .voltageMv  = mBatteryStatus.voltageMv,
         .motion     = mLastRadarReport.motion,
@@ -94,7 +94,7 @@ void AppTask::PublishCurrentState(bool burst)
     };
 
     mLastPublishMs = k_uptime_get();
-    mAdvertiser.Publish(m, burst);
+    (void)mPublisher.Publish(m, burst);
 }
 
 void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
@@ -145,7 +145,7 @@ void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
 
 int AppTask::Start()
 {
-    LOG_INF("Starting BTHome v2 mmWave Presence Sensor v%s (build %d)",
+    LOG_INF("Starting OpenThread SED + Home Assistant MQTT mmWave Presence Sensor v%s (build %d)",
             APP_VERSION_STRING, APP_BUILD_NUMBER);
 
     k_sem_init(&mEventSem, 0, K_SEM_MAX_LIMIT);
@@ -163,11 +163,10 @@ int AppTask::Start()
     // Read initial unloaded battery/VBUS voltage before enabling the radar 3.3 V rail
     SampleBattery();
 
-    // 2. Initialize BTHome v2 BLE Advertiser and broadcast initial state immediately
-    // before enabling the HLK-LD2410S 3.3 V load (guarantees BLE discovery even on USB-only power)
-    ret = mAdvertiser.Init();
+    // 2. Initialize OpenThread Sleepy End Device (SED) + Home Assistant MQTT Publisher
+    ret = mPublisher.Init();
     if (ret != 0) {
-        LOG_ERR("BthomeAdvertiser::Init failed (err: %d)", ret);
+        LOG_ERR("ThreadMqttPublisher::Init failed (err: %d)", ret);
         StatusLed::Instance().BlinkError(4);
         return ret;
     }
@@ -184,19 +183,19 @@ int AppTask::Start()
     // Ensure P0.15 status LED is strictly OFF before entering the low-power event loop
     StatusLed::Instance().Set(false);
 
-    // 4. Perform initial radar sample and broadcast updated burst advertisement
+    // 4. Perform initial radar sample and queue/publish updated state
     HandleOt2AndDistanceUpdate(true, true);
 
     // 5. Start periodic low-power timers (400 ms sub-second radar UART poll + heartbeat + battery)
     k_timer_start(&mOccupiedPollTimer,
-                  K_MSEC(CONFIG_APP_RADAR_POLL_INTERVAL_MS),
-                  K_MSEC(CONFIG_APP_RADAR_POLL_INTERVAL_MS));
+                   K_MSEC(CONFIG_APP_RADAR_POLL_INTERVAL_MS),
+                   K_MSEC(CONFIG_APP_RADAR_POLL_INTERVAL_MS));
     k_timer_start(&mHeartbeatTimer,
-                  K_SECONDS(CONFIG_APP_HEARTBEAT_INTERVAL_SEC),
-                  K_SECONDS(CONFIG_APP_HEARTBEAT_INTERVAL_SEC));
+                   K_SECONDS(CONFIG_APP_HEARTBEAT_INTERVAL_SEC),
+                   K_SECONDS(CONFIG_APP_HEARTBEAT_INTERVAL_SEC));
     k_timer_start(&mBatteryTimer,
-                  K_SECONDS(CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC),
-                  K_SECONDS(CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC));
+                   K_SECONDS(CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC),
+                   K_SECONDS(CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC));
 
     LOG_INF("Entering System ON low-power event loop (poll=%dms, heartbeat=%ds, battery=%ds)",
             CONFIG_APP_RADAR_POLL_INTERVAL_MS,
@@ -207,10 +206,6 @@ int AppTask::Start()
         k_sem_take(&mEventSem, K_FOREVER);
 
         const uint32_t events = static_cast<uint32_t>(atomic_clear(&mPendingEvents));
-
-        if (events & kEvtBurstDone) {
-            mAdvertiser.TransitionToIdleInterval();
-        }
 
         if (events & kEvtBatterySample) {
             SampleBattery();
@@ -224,6 +219,9 @@ int AppTask::Start()
         } else if (forcePublish) {
             PublishCurrentState(false);
         }
+
+        // Flush any queued boot/reconnect publish once Thread attaches and service MQTT keepalive
+        mPublisher.ProcessBackground();
     }
 
     return 0;

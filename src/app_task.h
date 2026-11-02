@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2026 Craig McLean
- * Application Task & Low-Power Event Loop (HLK-LD2410S + BTHome v2 BLE)
+ * Application Task & Low-Power Event Loop (HLK-LD2410S + OpenThread SED + HA MQTT)
  */
 
 #pragma once
@@ -9,7 +9,7 @@
 #include <zephyr/sys/atomic.h>
 #include "battery_monitor.h"
 #include "sensor_ld2410s.h"
-#include "bthome_advertiser.h"
+#include "thread_mqtt_publisher.h"
 
 class AppTask {
 public:
@@ -19,7 +19,7 @@ public:
     }
 
     /**
-     * @brief Initialize peripherals, BLE BTHome broadcaster, and run the low-power event loop.
+     * @brief Initialize peripherals, OpenThread SED + HA MQTT publisher, and run the low-power event loop.
      */
     int Start();
 
@@ -29,7 +29,7 @@ public:
     void NotifyOt2Edge();
 
     /**
-     * @brief Signal from timer context that the 1.0 s BLE burst window completed.
+     * @brief Signal from timer context that a burst window completed.
      */
     void NotifyBurstComplete();
 
@@ -47,7 +47,7 @@ private:
     void PublishCurrentState(bool burst);
 
     SensorLd2410s        mRadar;
-    BthomeAdvertiser     mAdvertiser;
+    ThreadMqttPublisher  mPublisher;
     BatteryStatus        mBatteryStatus;
     Ld2410sReport        mLastRadarReport;
     Ld2410sMotionTracker mMotionTracker;

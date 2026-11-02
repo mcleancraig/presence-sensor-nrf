@@ -5,6 +5,7 @@
 
 #include "../src/ld2410s_proto.h"
 #include "../src/bthome_proto.h"
+#include "../src/ha_mqtt_proto.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -427,6 +428,109 @@ static void TestLd2410sMotionTrackerKinematics()
     EXPECT_EQ(tracker.GetAnchorDistanceMm(), 1400u, "Post-OT2 sample anchors at 1400 mm");
 }
 
+static void TestHaMqttDiscoveryAndNat64()
+{
+    const uint8_t ficr[8] = {0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0};
+    char slug[20] = {};
+    char devName[20] = {};
+    EXPECT_EQ(HaMqttProto::FormatNodeSlug(ficr, sizeof(ficr), slug, sizeof(slug)),
+              HaMqttProto::kNodeSlugLen, "Node slug length == 13");
+    EXPECT_EQ(strncmp(slug, "presence_", 9), 0, "Node slug starts with presence_");
+    EXPECT_EQ(BthomeProto::FormatDeviceName(ficr, sizeof(ficr), devName, sizeof(devName)),
+              BthomeProto::kDeviceNameLen, "Device name length == 13");
+
+    // Verify lowercase hex in slug matches uppercase hex in device name
+    for (size_t i = 9; i < 13; ++i) {
+        const char upper = devName[i];
+        const char expectedLower = (upper >= 'A' && upper <= 'F') ? static_cast<char>(upper - 'A' + 'a') : upper;
+        EXPECT_EQ(slug[i], expectedLower, "Slug hex char matches lowercase of device name");
+    }
+
+    // State and availability topics
+    char stateTopic[HaMqttProto::kMaxTopicLen] = {};
+    char availTopic[HaMqttProto::kMaxTopicLen] = {};
+    EXPECT_TRUE(HaMqttProto::FormatStateTopic(slug, stateTopic, sizeof(stateTopic)) > 0u,
+                "FormatStateTopic succeeds");
+    EXPECT_TRUE(HaMqttProto::FormatAvailabilityTopic(slug, availTopic, sizeof(availTopic)) > 0u,
+                "FormatAvailabilityTopic succeeds");
+    EXPECT_TRUE(strstr(stateTopic, "/state") != nullptr, "State topic ends with /state");
+    EXPECT_TRUE(strstr(availTopic, "/status") != nullptr, "Availability topic ends with /status");
+
+    // State JSON payload formatting
+    const BthomeMeasurement mOn = {
+        .packetId   = 42u,
+        .batteryPct = 87u,
+        .voltageMv  = 3985u,
+        .motion     = true,
+        .occupancy  = true,
+        .distanceMm = 1340u,
+    };
+    char stateJson[HaMqttProto::kMaxStatePayloadLen] = {};
+    const size_t stateLen = HaMqttProto::FormatStatePayload(mOn, stateJson, sizeof(stateJson));
+    EXPECT_TRUE(stateLen > 0u, "FormatStatePayload ON succeeds");
+    EXPECT_EQ(strcmp(stateJson,
+                     "{\"occupancy\":\"ON\",\"motion\":\"ON\",\"distance_mm\":1340,\"battery_pct\":87,\"voltage_mv\":3985,\"packet_id\":42}"),
+              0, "FormatStatePayload exact JSON match (ON)");
+
+    const BthomeMeasurement mOff = {
+        .packetId   = 43u,
+        .batteryPct = 105u, // Clamped to 100
+        .voltageMv  = 3300u,
+        .motion     = false,
+        .occupancy  = false,
+        .distanceMm = 0u,
+    };
+    EXPECT_TRUE(HaMqttProto::FormatStatePayload(mOff, stateJson, sizeof(stateJson)) > 0u,
+                "FormatStatePayload OFF succeeds");
+    EXPECT_EQ(strcmp(stateJson,
+                     "{\"occupancy\":\"OFF\",\"motion\":\"OFF\",\"distance_mm\":0,\"battery_pct\":100,\"voltage_mv\":3300,\"packet_id\":43}"),
+              0, "FormatStatePayload exact JSON match (OFF + clamped battery_pct)");
+
+    // Discovery topics & payloads for all 5 entities
+    static constexpr HaEntityId kAllEntities[5] = {
+        HaEntityId::Occupancy,
+        HaEntityId::Motion,
+        HaEntityId::Distance,
+        HaEntityId::Battery,
+        HaEntityId::Voltage,
+    };
+    for (HaEntityId entity : kAllEntities) {
+        char discTopic[HaMqttProto::kMaxTopicLen] = {};
+        char discJson[HaMqttProto::kMaxDiscoveryJsonLen] = {};
+        const size_t tLen = HaMqttProto::FormatDiscoveryTopic(slug, entity, discTopic, sizeof(discTopic));
+        const size_t pLen = HaMqttProto::FormatDiscoveryPayload(
+            slug, devName, "1.1.0", entity, discJson, sizeof(discJson));
+        EXPECT_TRUE(tLen > 0u && tLen < sizeof(discTopic), "Discovery topic fits in buffer");
+        EXPECT_TRUE(pLen > 0u && pLen < sizeof(discJson), "Discovery payload fits in <512B buffer");
+        EXPECT_TRUE(strstr(discTopic, "homeassistant/") == discTopic, "Discovery topic prefix");
+        EXPECT_TRUE(strstr(discTopic, "/config") != nullptr, "Discovery topic suffix");
+        EXPECT_TRUE(strstr(discJson, "\"stat_t\":\"presence_sensor/") != nullptr, "Discovery payload has stat_t");
+        EXPECT_TRUE(strstr(discJson, "\"avty_t\":\"presence_sensor/") != nullptr, "Discovery payload has avty_t");
+        EXPECT_TRUE(strstr(discJson, "\"mdl\":\"HLK-LD2410S Thread SED\"") != nullptr, "Discovery payload has model");
+    }
+
+    // RFC 6052 /96 NAT64 synthesis & IPv4 literal parser
+    uint8_t ipv4[4] = {};
+    EXPECT_TRUE(HaMqttProto::ParseIpv4Literal("192.168.41.250", ipv4), "Parse valid IPv4 192.168.41.250");
+    EXPECT_EQ(ipv4[0], 192u, "IPv4 octet 0");
+    EXPECT_EQ(ipv4[1], 168u, "IPv4 octet 1");
+    EXPECT_EQ(ipv4[2], 41u,  "IPv4 octet 2");
+    EXPECT_EQ(ipv4[3], 250u, "IPv4 octet 3");
+    EXPECT_TRUE(!HaMqttProto::ParseIpv4Literal("192.168.41.999", ipv4), "Reject out-of-range IPv4 octet");
+    EXPECT_TRUE(!HaMqttProto::ParseIpv4Literal("192.168.41", ipv4), "Reject short IPv4 literal");
+
+    const uint8_t nat64Prefix[12] = {
+        0xfd, 0x11, 0x22, 0x33, 0x44, 0x55, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00
+    };
+    uint8_t synthIpv6[16] = {};
+    EXPECT_TRUE(HaMqttProto::SynthesizeNat64Ipv6(nat64Prefix, ipv4, synthIpv6), "SynthesizeNat64Ipv6 succeeds");
+    EXPECT_EQ(memcmp(&synthIpv6[0], nat64Prefix, 12u), 0, "NAT64 upper 96 bits match prefix");
+    EXPECT_EQ(synthIpv6[12], 192u, "NAT64 byte 12 == 192");
+    EXPECT_EQ(synthIpv6[13], 168u, "NAT64 byte 13 == 168");
+    EXPECT_EQ(synthIpv6[14], 41u,  "NAT64 byte 14 == 41");
+    EXPECT_EQ(synthIpv6[15], 250u, "NAT64 byte 15 == 250");
+}
+
 int main()
 {
     TestLd2410sCommandBuilders();
@@ -434,12 +538,13 @@ int main()
     TestLd2410sParserStandardAndAckWithNoise();
     TestBthomeV2EncodingAndSpecCompliance();
     TestLd2410sMotionTrackerKinematics();
+    TestHaMqttDiscoveryAndNat64();
 
     if (sTestsFailed > 0) {
         fprintf(stderr, "FAILED: %d/%d assertions failed\n", sTestsFailed, sTestsRun);
         return EXIT_FAILURE;
     }
 
-    printf("PASSED: All %d protocol assertions succeeded (HLK-LD2410S + BTHome v2)\n", sTestsRun);
+    printf("PASSED: All %d protocol assertions succeeded (HLK-LD2410S + BTHome v2 + HA MQTT/NAT64)\n", sTestsRun);
     return EXIT_SUCCESS;
 }

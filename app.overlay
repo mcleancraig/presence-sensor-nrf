@@ -14,7 +14,8 @@
         /delete-property/ zephyr,console;
         /delete-property/ zephyr,shell-uart;
         /delete-property/ zephyr,uart-mcumgr;
-        /delete-property/ zephyr,ieee802154;
+        zephyr,ieee802154 = &ieee802154;
+        zephyr,settings-partition = &storage_partition;
     };
 
     zephyr,user {
@@ -69,6 +70,7 @@
     status = "disabled";
 };
 
+/* Enable IEEE 802.15.4 radio for OpenThread Sleepy End Device (SED) */
 &ieee802154 {
-    status = "disabled";
+    status = "okay";
 };

@@ -1,10 +1,10 @@
 # presence-sensor-nrf
 
-Ultra-low-power 24 GHz mmWave Human Presence, Motion, Distance, and Battery Sensor for Home Assistant over **BTHome v2 Bluetooth Low Energy**, built on the SuperMini nRF52840 (`nice!nano v2` compatible) and the Hi-Link **HLK-LD2410S** battery-powered radar module.
+Ultra-low-power 24 GHz mmWave Human Presence, Motion, Distance, and Battery Sensor for Home Assistant over **OpenThread 1.3 Sleepy End Device (SED) + NAT64 + Home Assistant MQTT Auto-Discovery** (and host-tested BTHome v2 codec), built on the SuperMini nRF52840 (`nice!nano v2` compatible) and the Hi-Link **HLK-LD2410S** battery-powered radar module.
 
 > **Enclosure:** Three 3D-printable Bambu A1 enclosure models (STEP for Fusion + STL) in [`enclosure/`](enclosure/README.md) — see [Section 8](#8-3d-printable-enclosures-3-bambu-a1-models).
 >
-> **Bring-up notes:** see [`doc/bringup-notes.md`](doc/bringup-notes.md) for flash offset requirements (`0x1000` without SoftDevice), HLK-LD2410S continuous power vs. UART sleep architecture, BTHome v2 discovery, and debugging over USB CDC ACM.
+> **Bring-up notes:** see [`doc/bringup-notes.md`](doc/bringup-notes.md) for flash offset requirements (`0x1000` without SoftDevice), HLK-LD2410S continuous power vs. UART sleep architecture, and debugging over USB CDC ACM.
 
 ---
 
@@ -41,38 +41,32 @@ The HLK-LD2410S `J2` 5-pin header (`3V3`, `GND`, `OT1`, `RX`, `OT2`) uses a stan
 
 ---
 
-## 2. BTHome v2 BLE Advertising Format
+## 2. OpenThread 1.3 SED + NAT64 + Home Assistant MQTT Auto-Discovery
 
-The sensor operates as a **non-connectable, scannable BLE broadcaster** using the official **BTHome v2** service UUID (`0xFCD2`) at the nRF52840's maximum **`+8 dBm` (`6.3 mW`) transmit power** (`CONFIG_BT_CTLR_TX_PWR_PLUS_8=y`). Home Assistant auto-discovers it natively via local Bluetooth adapters or **ESPHome Bluetooth Proxies** with zero pairing codes or cloud dependencies.
+The sensor operates as an **OpenThread 1.3 Minimal Thread Device (MTD) / Sleepy End Device (SED)** at **`+8 dBm` (`6.3 mW`) IEEE 802.15.4 transmit power** (`CONFIG_OPENTHREAD_DEFAULT_TX_POWER=8`). It attaches to your OpenThread Border Router (OTBR), synthesizes the IPv6 address of your Home Assistant Mosquitto MQTT broker from the OTBR's `/96` **RFC 6052 NAT64 prefix**, and publishes retained **Home Assistant MQTT Auto-Discovery** configurations (`homeassistant/<component>/presence_xxxx/<object>/config`) plus real-time JSON state payloads (`presence_sensor/presence_xxxx/state`).
 
-### Device Identity
+### Device Identity & Topics
 
-- **Complete Local Name** (Scan Response): `Presence-XXXX` (where `XXXX` is the uppercase hex of the folded 16-bit FNV-1a hash computed by `BthomeProto::DeriveShortIdFromDeviceId()` over `hwinfo_get_device_id()`).
-- **BLE Address**: Deterministic Static Random MAC derived from `hwinfo_get_device_id()` (`(addr[5] & 0xC0) == 0xC0`), ensuring a stable device entity across battery swaps and firmware updates.
+- **Display Name**: `Presence-XXXX` (where `XXXX` is the uppercase hex of the folded 16-bit FNV-1a hash computed by `BthomeProto::DeriveShortIdFromDeviceId()` over `hwinfo_get_device_id()`).
+- **Node Slug**: `presence_xxxx` (`HaMqttProto::FormatNodeSlug()`).
+- **State Topic**: `presence_sensor/presence_xxxx/state`
+  ```json
+  {"occupancy":"ON","motion":"ON","distance_mm":1340,"battery_pct":87,"voltage_mv":3985,"packet_id":42}
+  ```
+- **Availability Topic (LWT)**: `presence_sensor/presence_xxxx/status` (`"online"` / `"offline"`, retained).
+- **Auto-Discovered Entities (5 Entities)**:
+  - `binary_sensor.presence_xxxx_occupancy` (`device_class: occupancy`)
+  - `binary_sensor.presence_xxxx_motion` (`device_class: motion`)
+  - `sensor.presence_xxxx_distance` (`device_class: distance`, `mm`)
+  - `sensor.presence_xxxx_battery` (`device_class: battery`, `%`)
+  - `sensor.presence_xxxx_voltage` (`device_class: voltage`, `mV`)
 
-### BTHome v2 Service Data Payload (`0xFCD2`, 17 Bytes)
+### Dynamic SED Fast-Polling & Sub-Second Lighting Latency
 
-Object IDs are encoded in **strictly ascending numerical order** per the BTHome v2 specification:
-
-| Byte Offset | Field / Object ID | Type | Description |
-| :--- | :--- | :--- | :--- |
-| `0..1` | `0xD2, 0xFC` | UUID16 LE | BTHome v2 Service UUID (`0xFCD2`) |
-| `2` | `0x40` | Device Info | BTHome v2 (`bit 5..7 = 2`), unencrypted (`bit 0 = 0`), regular update (`bit 2 = 0`) |
-| `3..4` | `0x00, <pkt_id>` | `uint8` | **Packet ID** (`0..255` monotonic deduplication counter) |
-| `5..6` | `0x01, <pct>` | `uint8` (`1 %`) | **Battery Percentage** (`0..100 %`, piecewise Li-ion curve) |
-| `7..9` | `0x0C, <mv_lo>, <mv_hi>` | `uint16` LE (`0.001 V`) | **Battery Voltage** in millivolts (e.g., `4125` -> `4.125 V`) |
-| `10..11` | `0x21, <0\|1>` | `uint8` (`bool`) | **Motion** (`1` = active walking/movement, `0` = stationary or clear) |
-| `12..13` | `0x23, <0\|1>` | `uint8` (`bool`) | **Occupancy / Presence** (`1` = `Detected` moving or stationary breathing human, `0` = `Clear`) |
-| `14..16` | `0x40, <mm_lo>, <mm_hi>` | `uint16` LE (`1 mm`) | **Target Distance** in millimeters (`0..65535 mm`, converted from HLK-LD2410S cm) |
-
-**Primary Advertising PDU Size**: `3` bytes (Flags AD structure) + `19` bytes (Service Data AD structure) = **`22` bytes** (well within the `31`-byte BLE legacy advertising limit).
-
-### Advertising Cadence & Sub-Second Lighting Latency
-
-- **Immediate State-Change Burst (`25–35 ms` Interval for `3.0 s`) + `15 s` Transition Re-Assertion**: On any occupancy/motion transition (`OT2` interrupt or UART target-state change) or `>= 100 mm` distance shift while occupied, the broadcaster enters a **25–35 ms high-density advertising burst for 3.0 s** (~100 BLE packets) with a newly incremented Packet ID, and re-asserts state changes every `3.2 s` for `15 s` so Home Assistant via ESPHome Wi-Fi/BLE shared-antenna proxies triggers bathroom lighting/automation within `< 50 ms` of detection and never misses a `motion -> off` or `occupancy -> off` transition.
-- **Continuous Interrupt-Driven UART RX (`mRxRing[256]`) & Kinematic Motion Classifier (`Ld2410sMotionTracker`)**: `uart0` RX (`P0.08`) stays continuously armed in interrupt mode so `OnUartIsr` captures 100% of asynchronous 5-byte (`6E...62`) and Standard (`F4...F5`) radar frames into `mRxRing[256]` with zero polling blind spots. `SampleTargetReport()` drains buffered frames non-blockingly (`< 1 ms`) every **`400 ms`** (`CONFIG_APP_RADAR_POLL_INTERVAL_MS`), enforces the `2100 mm` (`3 × 700 mm`) bathroom boundary, and trusts UART `Unoccupied` / out-of-bounds reports over `OT2`. `Ld2410sMotionTracker` evaluates radial distance kinematics (`>= 100 mm` movement) across all occupied frames (`0x02` and `0x03`) with a `5.0 s` active hold window so **Motion (`0x21`)** reports `Detected` on entry/walking and transitions cleanly to `Clear` after `5.0 s` of stillness while **Occupancy (`0x23`)** remains `Detected`.
-- **Active vs. Idle Steady-State Broadcast**: While occupied (`occupancy == true` or `motion == true`), post-burst advertising runs at **`~500 ms`** (`480–520 ms`); when unoccupied, the advertising interval relaxes to **`~1.5 s`** (`1500–1600 ms`), with a periodic state refresh every `60 s` (`CONFIG_APP_HEARTBEAT_INTERVAL_SEC`).
-- **Battery Refresh**: SAADC `VDDH/5` is sampled at boot and every `6 hours` (`21600 s`, `CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC`).
+- **Dynamic Poll Period (`80 ms` Active / `5000 ms` Sleep)**: During TCP handshake, MQTT `CONNECT`/`CONNACK`, and state `PUBLISH`, `ThreadMqttPublisher` switches the OpenThread child poll period to **`80 ms`** (`otLinkSetPollPeriod(instance, 80)`) for low-latency TCP delivery, and relaxes back to **`5000 ms`** (`5.0 s`) in idle sleep so the IEEE 802.15.4 radio remains off >99% of the time.
+- **Persistent TCP/NAT64 Session**: Keeps the MQTT session open across occupancy/motion transitions (`CONFIG_APP_MQTT_KEEPALIVE_SEC=300`) so subsequent `OT2` or UART state transitions publish in a single TCP segment without repeating the TCP/MQTT handshake.
+- **Continuous Interrupt-Driven UART RX (`mRxRing[256]`) & Kinematic Motion Classifier (`Ld2410sMotionTracker`)**: `uart0` RX (`P0.08`) stays continuously armed in interrupt mode so `OnUartIsr` captures 100% of asynchronous 5-byte (`6E...62`) and Standard (`F4...F5`) radar frames into `mRxRing[256]` with zero polling blind spots. `SampleTargetReport()` drains buffered frames non-blockingly (`< 1 ms`) every **`400 ms`** (`CONFIG_APP_RADAR_POLL_INTERVAL_MS`), enforces the `2100 mm` (`3 × 700 mm`) bathroom boundary, and trusts UART `Unoccupied` / out-of-bounds reports over `OT2`. `Ld2410sMotionTracker` evaluates radial distance kinematics (`>= 100 mm` movement) across all occupied frames (`0x02` and `0x03`) with a `5.0 s` active hold window so **Motion** reports `ON` on entry/walking and transitions cleanly to `OFF` after `5.0 s` of stillness while **Occupancy** remains `ON`.
+- **Battery Refresh**: SAADC `VDDH/5` is sampled at boot and every `1 hour` (`3600 s`, `CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC`).
 
 ---
 
@@ -99,13 +93,23 @@ The firmware is built using Nordic's **nRF Connect SDK v2.8.0** and **Zephyr RTO
 
 ### Host Protocol Unit Tests
 
-Pure C++20 encoders and parsers for the HLK-LD2410S binary protocol (`src/ld2410s_proto.*`) and BTHome v2 payloads (`src/bthome_proto.*`) run natively on macOS/Linux without hardware:
+Pure C++20 encoders and parsers for the HLK-LD2410S binary protocol (`src/ld2410s_proto.*`), Home Assistant MQTT Auto-Discovery / NAT64 address synthesis (`src/ha_mqtt_proto.*`), and BTHome v2 payloads (`src/bthome_proto.*`) run natively on macOS/Linux without hardware:
 
 ```bash
 scripts/run-tests.sh
 ```
 
-### Local Zephyr Build
+### Local Zephyr Build & `local.conf` Credentials (`Zero Secrets Invariant`)
+
+Create a gitignored `local.conf` in the repository root with your OpenThread Active Operational Dataset TLV hex string and Home Assistant MQTT credentials (automatically loaded by `CMakeLists.txt` when present; **never commit `local.conf` to git**):
+
+```ini
+CONFIG_APP_THREAD_DATASET_TLV_HEX="<your-openthread-active-dataset-tlv-hex>"
+CONFIG_APP_MQTT_BROKER_IPV4="192.168.41.250"
+CONFIG_APP_MQTT_BROKER_PORT=1883
+CONFIG_APP_MQTT_USERNAME="<your-mqtt-username>"
+CONFIG_APP_MQTT_PASSWORD="<your-mqtt-password>"
+```
 
 Expects the SDK in `~/ncs` next to this repo in `~/git/presence-sensor-nrf`:
 
@@ -125,9 +129,9 @@ For benchtop bring-up with live logs over USB CDC ACM (`screen /dev/cu.usbmodem*
 source env.sh
 west build --no-sysbuild -b nice_nano/nrf52840 -p always -o=-k0 \
   -s ~/git/presence-sensor-nrf \
-  -d ~/git/presence-sensor-nrf/build -- \
+  -d ~/git/presence-sensor-nrf/build_debug -- \
   -DBOARD_ROOT=$HOME/git/presence-sensor-nrf \
-  -DEXTRA_CONF_FILE=debug.conf \
+  -DEXTRA_CONF_FILE="local.conf;debug.conf" \
   -DEXTRA_DTC_OVERLAY_FILE=debug.overlay
 ```
 
@@ -155,16 +159,16 @@ scripts/fetch-firmware.sh --debug   # USB CDC ACM debug build
 
 ---
 
-## 6. Home Assistant Integration
+## 6. Home Assistant Integration (OpenThread + MQTT Auto-Discovery)
 
-1. Ensure Home Assistant has either a local Bluetooth adapter or an **ESPHome Bluetooth Proxy** within BLE range of the bathroom, and the **BTHome** integration enabled.
-2. Power on the sensor. Within seconds, Home Assistant automatically discovers **`Presence-XXXX`** under **Settings → Devices & Services → BTHome**.
-3. Click **Configure → Submit** to add the device. It exposes five entities:
-   - **Occupancy** (`binary_sensor.presence_xxxx_occupancy`, BTHome Object ID `0x23`, states `Clear` / `Detected`) — true for both moving and stationary/breathing presence. *(Note: If upgrading from an older firmware that used `0x2D` and showed `Window` / `Closed`, delete the device in **Settings → Devices & Services → BTHome → `Presence-XXXX` → Delete** so Home Assistant re-discovers it with `Occupancy`.)*
-   - **Motion** (`binary_sensor.presence_xxxx_motion`, BTHome Object ID `0x21`, states `Clear` / `Detected`) — true during active movement.
-   - **Distance** (`sensor.presence_xxxx_distance`, BTHome Object ID `0x40`) — target distance in mm / m.
-   - **Battery** (`sensor.presence_xxxx_battery`, BTHome Object ID `0x01`) — `0–100 %`.
-   - **Voltage** (`sensor.presence_xxxx_voltage`, BTHome Object ID `0x0C`) — cell voltage in `V`.
+1. Ensure your **OpenThread Border Router (OTBR)** has NAT64 enabled and your Home Assistant **MQTT (Mosquitto)** integration is running.
+2. Power on the sensor. Within seconds of attaching to the Thread network, the sensor connects to the MQTT broker via NAT64 and publishes retained Home Assistant MQTT Auto-Discovery configs for **`Presence-XXXX`** under **Settings → Devices & Services → MQTT**.
+3. The device automatically registers five entities:
+   - **Occupancy** (`binary_sensor.presence_xxxx_occupancy`, `device_class: occupancy`, states `Clear` / `Detected`) — true for both moving and stationary/breathing presence.
+   - **Motion** (`binary_sensor.presence_xxxx_motion`, `device_class: motion`, states `Clear` / `Detected`) — true during active movement and for `5.0 s` after stillness.
+   - **Distance** (`sensor.presence_xxxx_distance`, `device_class: distance`) — target distance in `mm`.
+   - **Battery** (`sensor.presence_xxxx_battery`, `device_class: battery`) — `0–100 %`.
+   - **Voltage** (`sensor.presence_xxxx_voltage`, `device_class: voltage`) — cell voltage in `mV`.
 
 ---
 
@@ -174,7 +178,7 @@ scripts/fetch-firmware.sh --debug   # USB CDC ACM debug build
 | :--- | :--- |
 | **HLK-LD2410S** (Low-power mode via `P0.13` 3.3 V rail; `8.0 Hz` fast response) | `58 – 120 µA` |
 | **nRF52840 System ON Idle** (RTC + RAM retention + GPIOTE `PORT` event on `P0.17`) | `~3 µA` |
-| **BLE Non-Connectable Scannable Advertising** (`+8 dBm` TX via `CONFIG_BT_CTLR_TX_PWR_PLUS_8=y`; `1.5 s` idle + `25–35 ms` `3.0 s` event bursts) | `~7 – 12 µA` |
+| **OpenThread 1.3 SED Radio** (`+8 dBm` TX, `5.0 s` idle MAC data poll + `80 ms` fast-poll on state transitions) | `~8 – 18 µA` |
 | **Brief `uart0` Wake Windows** (`OT2`-gated in 5-wire mode; `~62 ms` every `400 ms` while occupied/4-wire) | `~3 – 75 µA` |
 | **6-Hour SAADC `VDDH/5` Battery Sample** (one-shot, 16× oversampling) | `< 0.1 µA` |
 | **SuperMini Quiescent / Diode Leakage** (batch-dependent) | `4 – 60 µA` |

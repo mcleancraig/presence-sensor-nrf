@@ -1,17 +1,57 @@
 #
 # Copyright (c) 2026 Craig McLean
-# BTHome v2 BLE mmWave Presence Sensor (HLK-LD2410S) Kconfig
+# OpenThread SED + Home Assistant MQTT mmWave Presence Sensor (HLK-LD2410S) Kconfig
 #
 
-mainmenu "BTHome v2 BLE mmWave Presence Sensor"
+mainmenu "OpenThread SED + Home Assistant MQTT mmWave Presence Sensor"
 
 config APP_HEARTBEAT_INTERVAL_SEC
-	int "Periodic idle BTHome BLE heartbeat interval (seconds)"
+	int "Periodic idle MQTT state refresh interval (seconds)"
 	default 300
 	help
-	  Interval between periodic BTHome v2 heartbeat advertisements when no
+	  Interval between periodic Home Assistant MQTT state refreshes when no
 	  occupancy edge transitions occur. Occupancy state changes are always
-	  transmitted immediately via a high-priority BLE burst.
+	  transmitted immediately via fast-polled OpenThread MQTT publish.
+
+config APP_THREAD_DATASET_TLV_HEX
+	string "OpenThread Active Operational Dataset TLV hex string"
+	default ""
+	help
+	  Active Operational Dataset TLV hex string for the local Thread network
+	  (set in gitignored local.conf; never commit network keys to git).
+
+config APP_MQTT_BROKER_IPV4
+	string "Home Assistant Mosquitto MQTT broker IPv4 address (translated via NAT64)"
+	default "192.168.41.250"
+	help
+	  IPv4 address of the Home Assistant MQTT broker. Translated to an IPv6
+	  address at runtime using the OpenThread Border Router's /96 NAT64 prefix.
+
+config APP_MQTT_BROKER_PORT
+	int "Home Assistant MQTT broker TCP port"
+	range 1 65535
+	default 1883
+	help
+	  TCP port of the Home Assistant Mosquitto MQTT broker.
+
+config APP_MQTT_USERNAME
+	string "Home Assistant MQTT broker username"
+	default ""
+	help
+	  MQTT broker username (set in gitignored local.conf).
+
+config APP_MQTT_PASSWORD
+	string "Home Assistant MQTT broker password"
+	default ""
+	help
+	  MQTT broker password (set in gitignored local.conf; never commit to git).
+
+config APP_MQTT_KEEPALIVE_SEC
+	int "MQTT keepalive interval (seconds)"
+	range 30 3600
+	default 300
+	help
+	  MQTT keepalive interval in seconds for the persistent TCP/NAT64 session.
 
 config APP_RADAR_POLL_INTERVAL_MS
 	int "Fast UART radar poll interval for sub-second presence & distance updates (ms)"
