@@ -33,7 +33,7 @@ int main()
 #endif
 
     LOG_INF("=========================================================");
-    LOG_INF("  BTHome v2 BLE Presence Sensor v%s (SuperMini nRF52840)", APP_VERSION_STRING);
+    LOG_INF("  OpenThread SED + HA MQTT Presence Sensor v%s (SuperMini nRF52840)", APP_VERSION_STRING);
     LOG_INF("=========================================================");
 
     int ret = AppTask::Instance().Start();

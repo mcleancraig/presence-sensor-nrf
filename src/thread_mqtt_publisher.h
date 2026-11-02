@@ -13,9 +13,11 @@
 
 class ThreadMqttPublisher {
 public:
-    static constexpr uint32_t kFastPollPeriodMs = 80u;   // 80 ms child data poll during TCP/MQTT active exchange
-    static constexpr uint32_t kIdlePollPeriodMs = 5000u; // 5000 ms sleepy end device idle poll period
-    static constexpr int64_t  kFastPollHoldMs   = 1200;  // Keep 80 ms poll for 1.2 s after publish for TCP ACK
+    static constexpr uint32_t kFastPollPeriodMs     = 80u;   // 80 ms child data poll during TCP/MQTT active exchange
+    static constexpr uint32_t kIdlePollPeriodMs     = 5000u; // 5000 ms sleepy end device idle poll period
+    static constexpr int64_t  kFastPollHoldMs       = 1500;  // Keep 80 ms poll for 1.5 s after publish for TCP ACK
+    static constexpr uint8_t  kDiscoveryTotalSteps  = 6u;    // Step 0: online status, Steps 1..5: 5 HA entities
+    static constexpr int64_t  kDiscoveryPaceMs      = 250;   // Pace discovery packets >= 250 ms apart for 6LoWPAN TCP ACKs
 
     ThreadMqttPublisher();
 
@@ -50,10 +52,11 @@ private:
 
     bool ResolveBrokerNat64Address(struct in6_addr *outAddr6);
     void SetFastPoll(bool fast);
+    void PumpSocket(int32_t timeoutMs);
     int ConnectToBroker();
     void DisconnectBroker();
     int PublishRaw(const char *topic, const void *payload, size_t payloadLen, bool retain);
-    int PublishAvailabilityAndDiscovery();
+    int PublishNextDiscoveryStep();
     int TryFlushPending();
 
     struct mqtt_client   mClient;
@@ -62,8 +65,8 @@ private:
     struct mqtt_utf8     mPassUtf8;
     struct mqtt_topic    mWillTopic;
     struct mqtt_utf8     mWillMsg;
-    uint8_t              mRxBuf[256];
-    uint8_t              mTxBuf[768];
+    uint8_t              mRxBuf[512];
+    uint8_t              mTxBuf[1024];
 
     char                 mDeviceName[BthomeProto::kDeviceNameLen + 1];
     char                 mNodeSlug[HaMqttProto::kNodeSlugLen + 1];
@@ -73,11 +76,12 @@ private:
     BthomeMeasurement    mPendingMeasurement;
     int64_t              mFastPollDeadlineMs;
     int64_t              mLastConnectAttemptMs;
+    int64_t              mLastDiscoveryStepMs;
     uint16_t             mNextMsgId;
     uint8_t              mPacketId;
+    uint8_t              mDiscoveryStep;
     bool                 mConnected;
     bool                 mConnackReceived;
-    bool                 mDiscoveryPublished;
     bool                 mHasPendingPublish;
     bool                 mFastPollActive;
 };

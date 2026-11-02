@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2026 Craig McLean
- * Application Task & Low-Power Event Loop (HLK-LD2410S + BTHome v2 BLE)
+ * Application Task & Low-Power Event Loop (HLK-LD2410S + OpenThread SED + Home Assistant MQTT)
  */
 
 #include "app_task.h"

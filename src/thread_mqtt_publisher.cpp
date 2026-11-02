@@ -41,11 +41,12 @@ ThreadMqttPublisher::ThreadMqttPublisher()
       mPendingMeasurement{},
       mFastPollDeadlineMs(0),
       mLastConnectAttemptMs(-kReconnectBackoffMs),
+      mLastDiscoveryStepMs(0),
       mNextMsgId(1u),
       mPacketId(0u),
+      mDiscoveryStep(0u),
       mConnected(false),
       mConnackReceived(false),
-      mDiscoveryPublished(false),
       mHasPendingPublish(false),
       mFastPollActive(false)
 {
@@ -86,8 +87,8 @@ void ThreadMqttPublisher::OnMqttEvent(const struct mqtt_evt *evt)
 
     case MQTT_EVT_DISCONNECT:
         LOG_INF("MQTT disconnected (reason=%d)", evt->result);
-        mConnected          = false;
-        mDiscoveryPublished = false;
+        mConnected     = false;
+        mDiscoveryStep = 0u;
         break;
 
     case MQTT_EVT_PUBACK:
@@ -254,9 +255,27 @@ void ThreadMqttPublisher::DisconnectBroker()
         (void)zsock_close(mClient.transport.tcp.sock);
         mClient.transport.tcp.sock = -1;
     }
-    mConnected          = false;
-    mConnackReceived    = false;
-    mDiscoveryPublished = false;
+    mConnected       = false;
+    mConnackReceived = false;
+    mDiscoveryStep   = 0u;
+}
+
+void ThreadMqttPublisher::PumpSocket(int32_t timeoutMs)
+{
+    if (!mConnected || mClient.transport.tcp.sock < 0) {
+        return;
+    }
+
+    struct zsock_pollfd pfd{};
+    pfd.fd     = mClient.transport.tcp.sock;
+    pfd.events = ZSOCK_POLLIN;
+
+    const int pollRet = zsock_poll(&pfd, 1, timeoutMs);
+    if (pollRet > 0 && (pfd.revents & (ZSOCK_POLLIN | ZSOCK_POLLHUP | ZSOCK_POLLERR))) {
+        if (mqtt_input(&mClient) != 0) {
+            DisconnectBroker();
+        }
+    }
 }
 
 int ThreadMqttPublisher::ConnectToBroker()
@@ -315,8 +334,10 @@ int ThreadMqttPublisher::ConnectToBroker()
     mClient.will_message  = &mWillMsg;
     mClient.will_retain   = 1u;
 
-    mConnected       = false;
-    mConnackReceived = false;
+    mConnected           = false;
+    mConnackReceived     = false;
+    mDiscoveryStep       = 0u;
+    mLastDiscoveryStepMs = 0;
 
     int ret = mqtt_connect(&mClient);
     if (ret != 0) {
@@ -349,7 +370,7 @@ int ThreadMqttPublisher::ConnectToBroker()
         return -ETIMEDOUT;
     }
 
-    return PublishAvailabilityAndDiscovery();
+    return PublishNextDiscoveryStep();
 }
 
 int ThreadMqttPublisher::PublishRaw(const char *topic, const void *payload, size_t payloadLen, bool retain)
@@ -379,28 +400,45 @@ int ThreadMqttPublisher::PublishRaw(const char *topic, const void *payload, size
     return ret;
 }
 
-int ThreadMqttPublisher::PublishAvailabilityAndDiscovery()
+int ThreadMqttPublisher::PublishNextDiscoveryStep()
 {
-    int ret = PublishRaw(mAvailabilityTopic,
+    if (!mConnected) {
+        return -ENOTCONN;
+    }
+    if (mDiscoveryStep >= kDiscoveryTotalSteps) {
+        return 0;
+    }
+
+    const int64_t nowMs = k_uptime_get();
+    if (mDiscoveryStep > 0u && (nowMs - mLastDiscoveryStepMs) < kDiscoveryPaceMs) {
+        return 0;
+    }
+
+    SetFastPoll(true);
+    PumpSocket(0);
+    if (!mConnected) {
+        return -ENOTCONN;
+    }
+
+    int ret = 0;
+    if (mDiscoveryStep == 0u) {
+        ret = PublishRaw(mAvailabilityTopic,
                          HaMqttProto::kAvailabilityOnline,
                          strlen(HaMqttProto::kAvailabilityOnline),
                          true);
-    if (ret != 0) {
-        return ret;
-    }
+    } else {
+        static constexpr HaEntityId kEntities[5] = {
+            HaEntityId::Occupancy,
+            HaEntityId::Motion,
+            HaEntityId::Distance,
+            HaEntityId::Battery,
+            HaEntityId::Voltage,
+        };
+        const HaEntityId entity = kEntities[mDiscoveryStep - 1u];
 
-    static constexpr HaEntityId kEntities[5] = {
-        HaEntityId::Occupancy,
-        HaEntityId::Motion,
-        HaEntityId::Distance,
-        HaEntityId::Battery,
-        HaEntityId::Voltage,
-    };
+        char discTopic[HaMqttProto::kMaxTopicLen] = {};
+        char discJson[HaMqttProto::kMaxDiscoveryJsonLen] = {};
 
-    char discTopic[HaMqttProto::kMaxTopicLen] = {};
-    char discJson[HaMqttProto::kMaxDiscoveryJsonLen] = {};
-
-    for (HaEntityId entity : kEntities) {
         const size_t tLen = HaMqttProto::FormatDiscoveryTopic(
             mNodeSlug, entity, discTopic, sizeof(discTopic));
         const size_t pLen = HaMqttProto::FormatDiscoveryPayload(
@@ -409,13 +447,19 @@ int ThreadMqttPublisher::PublishAvailabilityAndDiscovery()
             return -EINVAL;
         }
         ret = PublishRaw(discTopic, discJson, pLen, true);
-        if (ret != 0) {
-            return ret;
-        }
     }
 
-    mDiscoveryPublished = true;
-    LOG_INF("Published Home Assistant MQTT Discovery (5 entities) for %s", mDeviceName);
+    if (ret != 0) {
+        return ret;
+    }
+
+    mLastDiscoveryStepMs = k_uptime_get();
+    ++mDiscoveryStep;
+    PumpSocket(60);
+
+    if (mDiscoveryStep == kDiscoveryTotalSteps) {
+        LOG_INF("Published Home Assistant MQTT Discovery (5 entities) for %s", mDeviceName);
+    }
     return 0;
 }
 
@@ -430,14 +474,21 @@ int ThreadMqttPublisher::TryFlushPending()
         if (connRet != 0) {
             return connRet;
         }
-    } else if (!mDiscoveryPublished) {
-        int discRet = PublishAvailabilityAndDiscovery();
-        if (discRet != 0) {
-            return discRet;
-        }
+    }
+
+    if (mDiscoveryStep < kDiscoveryTotalSteps) {
+        return PublishNextDiscoveryStep();
+    }
+
+    if ((k_uptime_get() - mLastDiscoveryStepMs) < kDiscoveryPaceMs) {
+        return 0;
     }
 
     SetFastPoll(true);
+    PumpSocket(0);
+    if (!mConnected) {
+        return -ENOTCONN;
+    }
 
     char stateJson[HaMqttProto::kMaxStatePayloadLen] = {};
     const size_t jsonLen = HaMqttProto::FormatStatePayload(
@@ -447,15 +498,9 @@ int ThreadMqttPublisher::TryFlushPending()
     }
 
     int ret = PublishRaw(mStateTopic, stateJson, jsonLen, true);
-    if (ret != 0) {
-        // Reconnect once immediately if the persistent TCP socket was closed by broker
-        if (ConnectToBroker() == 0) {
-            ret = PublishRaw(mStateTopic, stateJson, jsonLen, true);
-        }
-    }
-
     if (ret == 0) {
         mHasPendingPublish = false;
+        PumpSocket(40);
         LOG_INF("MQTT state published [pkt=%u]: %s", mPendingMeasurement.packetId, stateJson);
     }
     return ret;
@@ -474,21 +519,20 @@ int ThreadMqttPublisher::Publish(const BthomeMeasurement &m, bool burst)
 
 void ThreadMqttPublisher::ProcessBackground()
 {
+    if (mConnected) {
+        PumpSocket(0);
+    }
+
+    if (mConnected && mDiscoveryStep < kDiscoveryTotalSteps) {
+        (void)PublishNextDiscoveryStep();
+    }
+
     if (mHasPendingPublish) {
         (void)TryFlushPending();
     }
 
     if (mConnected) {
-        struct zsock_pollfd pfd{};
-        pfd.fd     = mClient.transport.tcp.sock;
-        pfd.events = ZSOCK_POLLIN;
-
-        const int pollRet = zsock_poll(&pfd, 1, 0);
-        if (pollRet > 0 && (pfd.revents & (ZSOCK_POLLIN | ZSOCK_POLLHUP | ZSOCK_POLLERR))) {
-            if (mqtt_input(&mClient) != 0) {
-                DisconnectBroker();
-            }
-        }
+        PumpSocket(0);
 
         if (mConnected) {
             const int timeLeftMs = mqtt_keepalive_time_left(&mClient);
@@ -501,7 +545,10 @@ void ThreadMqttPublisher::ProcessBackground()
         }
     }
 
-    if (mFastPollActive && !mHasPendingPublish && (k_uptime_get() >= mFastPollDeadlineMs)) {
+    if (mFastPollActive &&
+        !mHasPendingPublish &&
+        (mDiscoveryStep >= kDiscoveryTotalSteps) &&
+        (k_uptime_get() >= mFastPollDeadlineMs)) {
         SetFastPoll(false);
     }
 }
