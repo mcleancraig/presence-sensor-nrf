@@ -7,6 +7,7 @@
 
 #include "bthome_proto.h"
 #include "ha_mqtt_proto.h"
+#include "ota_updater.h"
 #include <zephyr/kernel.h>
 #include <zephyr/net/mqtt.h>
 #include <zephyr/net/socket.h>
@@ -48,6 +49,7 @@ public:
 
 private:
     static void OnMqttEventStatic(struct mqtt_client *client, const struct mqtt_evt *evt);
+    static int PublishOtaStatusStatic(void *ctx, const char *topic, const char *jsonPayload);
     void OnMqttEvent(const struct mqtt_evt *evt);
 
     bool ResolveBrokerNat64Address(struct in6_addr *outAddr6);
@@ -55,6 +57,7 @@ private:
     void PumpSocket(int32_t timeoutMs);
     int ConnectToBroker();
     void DisconnectBroker();
+    int SubscribeOtaTopics();
     int PublishRaw(const char *topic, const void *payload, size_t payloadLen, bool retain);
     int PublishNextDiscoveryStep();
     int TryFlushPending();
@@ -65,7 +68,7 @@ private:
     struct mqtt_utf8     mPassUtf8;
     struct mqtt_topic    mWillTopic;
     struct mqtt_utf8     mWillMsg;
-    uint8_t              mRxBuf[512];
+    uint8_t              mRxBuf[768];
     uint8_t              mTxBuf[1024];
 
     char                 mDeviceName[BthomeProto::kDeviceNameLen + 1];
@@ -73,10 +76,12 @@ private:
     char                 mStateTopic[HaMqttProto::kMaxTopicLen];
     char                 mAvailabilityTopic[HaMqttProto::kMaxTopicLen];
 
+    OtaUpdater           mOtaUpdater;
     BthomeMeasurement    mPendingMeasurement;
     int64_t              mFastPollDeadlineMs;
     int64_t              mLastConnectAttemptMs;
     int64_t              mLastDiscoveryStepMs;
+    int64_t              mLastPingSentMs;
     uint16_t             mNextMsgId;
     uint8_t              mPacketId;
     uint8_t              mDiscoveryStep;

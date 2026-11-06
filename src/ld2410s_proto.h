@@ -37,6 +37,7 @@ struct Ld2410sReport {
     uint16_t           distanceCm;
     uint16_t           distanceMm;
     bool               isMinimalFrame;
+    bool               isLd2410cFrame;
 };
 
 struct Ld2410sAck {

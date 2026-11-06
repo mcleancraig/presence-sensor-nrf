@@ -25,7 +25,7 @@ static constexpr int64_t  kPostTransitionReassertPeriodMs  = 3200;
 
 AppTask::AppTask()
     : mBatteryStatus{BatteryMonitor::VOLTAGE_NOMINAL_MV, 50, BatteryChargeLevel::OK, false},
-      mLastRadarReport{Ld2410sTargetState::Unoccupied, false, false, 0, 0, true},
+      mLastRadarReport{Ld2410sTargetState::Unoccupied, false, false, 0, 0, true, false},
       mPendingEvents(ATOMIC_INIT(0)),
       mLastStateChangeMs(0),
       mLastPublishMs(0),
@@ -103,17 +103,16 @@ void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
     mRadar.SampleTargetReport(&report);
 
     const int64_t nowMs = k_uptime_get();
-    static constexpr uint16_t kMaxBathroomDistanceMm =
-        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kActiveGateWidthMm);
+    static constexpr uint16_t kMaxDistanceMm =
+        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_DISTANCE_MM);
     static constexpr int64_t kOccupancyHoldWindowMs =
         static_cast<int64_t>(CONFIG_APP_RADAR_HOLD_S) * 1000;
-    mMotionTracker.Update(&report, nowMs, kMaxBathroomDistanceMm, kOccupancyHoldWindowMs);
+    mMotionTracker.Update(&report, nowMs, kMaxDistanceMm, kOccupancyHoldWindowMs);
     mLastRadarReport = report;
 
     const bool stateChanged = (report.occupied != mLastOccupied) ||
                               (report.motion != mLastMotion);
     const bool occupancyEdge = (report.occupied != mLastOccupied);
-    const bool distanceChanged = (report.distanceMm != mLastPublishedDistanceMm);
     const uint16_t distDeltaMm = (report.distanceMm > mLastPublishedDistanceMm)
                                      ? (report.distanceMm - mLastPublishedDistanceMm)
                                      : (mLastPublishedDistanceMm - report.distanceMm);
@@ -133,9 +132,10 @@ void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
         }
     }
 
-    // Re-assert recent occupancy/motion transitions every 3.2 s for 15 s so ESPHome
-    // Wi-Fi/BLE shared-antenna proxies never miss a motion->off or occupancy->off edge.
+    // Re-assert recent occupancy/motion transitions every 3.2 s for 15 s on battery/SED builds;
+    // skipped on always-USB-powered Thread MED builds where TCP/MQTT delivery is continuous.
     const bool shouldReassertTransition =
+        !IS_ENABLED(CONFIG_APP_ALWAYS_USB_POWERED) &&
         (mLastStateChangeMs > 0) &&
         ((nowMs - mLastStateChangeMs) <= kPostTransitionReassertWindowMs) &&
         ((nowMs - mLastPublishMs) >= kPostTransitionReassertPeriodMs);
@@ -148,7 +148,7 @@ void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
                              stateChanged ||
                              significantDistChange ||
                              shouldReassertTransition;
-    if (shouldBurst || forcePublish || distanceChanged) {
+    if (shouldBurst || forcePublish) {
         mLastPublishedDistanceMm = report.distanceMm;
         PublishCurrentState(shouldBurst);
     }

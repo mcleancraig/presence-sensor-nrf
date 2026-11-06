@@ -27,6 +27,17 @@ config APP_RADAR_LD2410C
 
 endchoice
 
+config APP_ALWAYS_USB_POWERED
+	bool "Device is permanently USB-powered (disable battery/SED power-saving handicaps)"
+	default y if APP_RADAR_LD2410C
+	default n
+	help
+	  Enable when the board/sensor assembly is permanently powered from 5 V USB-C.
+	  Disables Sleepy End Device (SED) radio duty-cycling in favor of an always-on
+	  OpenThread Minimal End Device (MED, mRxOnWhenIdle=true), keeps UART0 active
+	  continuously at 100 ms (10 Hz) real-time frame polling, skips battery SAADC
+	  power-gating delays, and enables wireless MQTT Firmware Over-The-Air (FOTA).
+
 config APP_HEARTBEAT_INTERVAL_SEC
 	int "Periodic idle MQTT state refresh interval (seconds)"
 	default 300
@@ -114,13 +125,25 @@ config APP_RADAR_MIN_GATE
 	help
 	  Sets the HLK-LD2410S nearest detection gate (0 = 0.0 m).
 
+config APP_RADAR_MAX_DISTANCE_MM
+	int "Maximum valid target distance boundary (mm)"
+	range 500 6000
+	default 2950 if APP_RADAR_LD2410C
+	default 2100
+	help
+	  Clamps radar targets beyond this distance (mm) to Unoccupied so far-wall
+	  or hallway reflections beyond the room boundary are ignored (2950 mm for
+	  a 3.0 m office with HLK-LD2410C; 2100 mm for a 3 m^3 bathroom with LD2410S).
+
 config APP_RADAR_HOLD_S
-	int "HLK-LD2410S unoccupied delay / hold time (seconds)"
-	range 10 120
+	int "Unoccupied delay / hold time (seconds)"
+	range 10 600
+	default 180 if APP_RADAR_LD2410C
 	default 30
 	help
-	  Time in seconds the HLK-LD2410S keeps OT2 asserted after the last
-	  detected micro-motion or breathing signature clears.
+	  Time in seconds occupancy remains asserted after the last detected motion
+	  or breathing signature clears (180 s default for seated office desk work on
+	  HLK-LD2410C; 30 s default for walk-in bathroom on HLK-LD2410S).
 
 choice APP_BATTERY_SENSE
 	prompt "Battery voltage sense method"

@@ -79,6 +79,7 @@ static void PopulateReportFromRaw(uint8_t rawState,
     outFrame->report.distanceCm     = distCm;
     outFrame->report.distanceMm     = CmToMmClamped(distCm, occupied);
     outFrame->report.isMinimalFrame = isMinimalFrame;
+    outFrame->report.isLd2410cFrame = false;
 }
 
 static void PopulateLd2410cReportFromRaw(uint8_t rawState,
@@ -133,6 +134,7 @@ static void PopulateLd2410cReportFromRaw(uint8_t rawState,
     outFrame->report.distanceCm     = distCm;
     outFrame->report.distanceMm     = CmToMmClamped(distCm, occupied);
     outFrame->report.isMinimalFrame = false;
+    outFrame->report.isLd2410cFrame = true;
 }
 
 size_t BuildEnterConfigCmd(uint8_t *outBuf, size_t maxLen)
@@ -517,12 +519,21 @@ void Ld2410sMotionTracker::Update(Ld2410sReport *inoutReport,
         const bool wasExpired = mHasMotionTimestamp &&
                                 (occupancyHoldWindowMs > 0) &&
                                 ((nowMs - mLastMotionDetectedMs) >= occupancyHoldWindowMs);
+        const bool isDopplerMovingOn2410c =
+            inoutReport->isLd2410cFrame &&
+            (inoutReport->motion || (inoutReport->state == Ld2410sTargetState::Moving));
         const bool canTriggerMotion =
             inoutReport->isMinimalFrame ||
             inoutReport->motion ||
             (inoutReport->state == Ld2410sTargetState::Moving);
 
-        if (mLastMotionAnchorDistMm == 0u && inoutReport->distanceMm > 0u) {
+        if (isDopplerMovingOn2410c) {
+            // HLK-LD2410C dedicated Doppler moving gates (0x01 / 0x03) detect seated typing,
+            // head/arm motion, and fine posture shifts even when radial distance delta is < 100 mm.
+            mLastMotionAnchorDistMm = inoutReport->distanceMm;
+            mHasMotionTimestamp     = true;
+            mLastMotionDetectedMs   = nowMs;
+        } else if (mLastMotionAnchorDistMm == 0u && inoutReport->distanceMm > 0u) {
             if (!wasExpired || canTriggerMotion) {
                 mLastMotionAnchorDistMm = inoutReport->distanceMm;
                 if (!mHasMotionTimestamp || wasExpired) {

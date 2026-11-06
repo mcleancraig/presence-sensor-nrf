@@ -38,10 +38,12 @@ ThreadMqttPublisher::ThreadMqttPublisher()
       mWillMsg{},
       mRxBuf{},
       mTxBuf{},
+      mOtaUpdater{},
       mPendingMeasurement{},
       mFastPollDeadlineMs(0),
       mLastConnectAttemptMs(-kReconnectBackoffMs),
       mLastDiscoveryStepMs(0),
+      mLastPingSentMs(0),
       mNextMsgId(1u),
       mPacketId(0u),
       mDiscoveryStep(0u),
@@ -62,6 +64,15 @@ void ThreadMqttPublisher::OnMqttEventStatic(struct mqtt_client *client, const st
     if (self) {
         self->OnMqttEvent(evt);
     }
+}
+
+int ThreadMqttPublisher::PublishOtaStatusStatic(void *ctx, const char *topic, const char *jsonPayload)
+{
+    auto *self = static_cast<ThreadMqttPublisher *>(ctx);
+    if (!self || !topic || !jsonPayload) {
+        return -EINVAL;
+    }
+    return self->PublishRaw(topic, jsonPayload, strlen(jsonPayload), false);
 }
 
 void ThreadMqttPublisher::OnMqttEvent(const struct mqtt_evt *evt)
@@ -91,8 +102,41 @@ void ThreadMqttPublisher::OnMqttEvent(const struct mqtt_evt *evt)
         mDiscoveryStep = 0u;
         break;
 
+    case MQTT_EVT_PUBLISH: {
+        const auto &pub = evt->param.publish;
+        char topicBuf[OtaProto::kMaxOtaTopicLen] = {};
+        const size_t tLen = (pub.message.topic.topic.size < (sizeof(topicBuf) - 1u))
+                                ? pub.message.topic.topic.size
+                                : (sizeof(topicBuf) - 1u);
+        memcpy(topicBuf, pub.message.topic.topic.utf8, tLen);
+        topicBuf[tLen] = '\0';
+
+        uint8_t payloadBuf[OtaProto::kMaxChunkDataSize + 32u] = {};
+        const uint32_t pLen = pub.message.payload.len;
+        if (pLen > 0u && pLen <= sizeof(payloadBuf)) {
+            const int readRet = mqtt_readall_publish_payload(&mClient, payloadBuf, pLen);
+            if (readRet == 0) {
+                mOtaUpdater.HandleMqttMessage(
+                    topicBuf, payloadBuf, pLen, PublishOtaStatusStatic, this);
+            }
+        } else if (pLen > sizeof(payloadBuf)) {
+            // Drain oversized payload so MQTT stream stays synchronized
+            uint8_t discard[64];
+            uint32_t remaining = pLen;
+            while (remaining > 0u) {
+                const uint32_t chunk = (remaining > sizeof(discard)) ? sizeof(discard) : remaining;
+                if (mqtt_read_publish_payload(&mClient, discard, chunk) <= 0) {
+                    break;
+                }
+                remaining -= chunk;
+            }
+        }
+        break;
+    }
+
     case MQTT_EVT_PUBACK:
     case MQTT_EVT_PINGRESP:
+    case MQTT_EVT_SUBACK:
     default:
         break;
     }
@@ -112,8 +156,9 @@ int ThreadMqttPublisher::Init()
     HaMqttProto::FormatNodeSlug(devId, static_cast<size_t>(devIdLen), mNodeSlug, sizeof(mNodeSlug));
     HaMqttProto::FormatStateTopic(mNodeSlug, mStateTopic, sizeof(mStateTopic));
     HaMqttProto::FormatAvailabilityTopic(mNodeSlug, mAvailabilityTopic, sizeof(mAvailabilityTopic));
+    (void)mOtaUpdater.Init(mNodeSlug);
 
-    // 2. Configure OpenThread Sleepy End Device (SED) + +8 dBm TX power + Active Dataset TLV
+    // 2. Configure OpenThread link mode (Always-On MED when USB-powered, Sleepy SED when battery-powered)
     struct openthread_context *otCtx = openthread_get_default_context();
     otInstance *instance = openthread_get_default_instance();
     if (!otCtx || !instance) {
@@ -123,17 +168,18 @@ int ThreadMqttPublisher::Init()
 
     openthread_api_mutex_lock(otCtx);
 
-    // SED link mode with Full Network Data (mNetworkData = true) so the child receives
-    // the Border Router's /96 NAT64 prefix in Thread Network Data.
+    const bool alwaysUsbPowered = IS_ENABLED(CONFIG_APP_ALWAYS_USB_POWERED);
     otLinkModeConfig linkMode{};
-    linkMode.mRxOnWhenIdle = false;
+    linkMode.mRxOnWhenIdle = alwaysUsbPowered;
     linkMode.mDeviceType   = false;
     linkMode.mNetworkData  = true;
     (void)otThreadSetLinkMode(instance, linkMode);
 
-    // Enforce +8 dBm IEEE 802.15.4 transmit power and 5000 ms sleepy poll period
+    // Enforce +8 dBm IEEE 802.15.4 transmit power; only set sleepy parent poll period when SED
     (void)otPlatRadioSetTransmitPower(instance, 8);
-    (void)otLinkSetPollPeriod(instance, kIdlePollPeriodMs);
+    if (!alwaysUsbPowered) {
+        (void)otLinkSetPollPeriod(instance, kIdlePollPeriodMs);
+    }
 
     // Load Active Operational Dataset TLV if provided via CONFIG_APP_THREAD_DATASET_TLV_HEX
     const char *tlvHex = CONFIG_APP_THREAD_DATASET_TLV_HEX;
@@ -167,13 +213,20 @@ int ThreadMqttPublisher::Init()
         return -EIO;
     }
 
-    LOG_INF("OpenThread SED initialized: name=%s, slug=%s, state_topic=%s, tx_pwr=+8dBm",
-            mDeviceName, mNodeSlug, mStateTopic);
+    LOG_INF("OpenThread %s initialized: name=%s, slug=%s, state_topic=%s, tx_pwr=+8dBm",
+            alwaysUsbPowered ? "MED (Always-On RX)" : "SED (Sleepy)",
+            mDeviceName,
+            mNodeSlug,
+            mStateTopic);
     return 0;
 }
 
 void ThreadMqttPublisher::SetFastPoll(bool fast)
 {
+    if (IS_ENABLED(CONFIG_APP_ALWAYS_USB_POWERED)) {
+        return;
+    }
+
     struct openthread_context *otCtx = openthread_get_default_context();
     otInstance *instance = openthread_get_default_instance();
     if (!otCtx || !instance) {
@@ -459,7 +512,43 @@ int ThreadMqttPublisher::PublishNextDiscoveryStep()
 
     if (mDiscoveryStep == kDiscoveryTotalSteps) {
         LOG_INF("Published Home Assistant MQTT Discovery (5 entities) for %s", mDeviceName);
+        (void)SubscribeOtaTopics();
     }
+    return 0;
+}
+
+int ThreadMqttPublisher::SubscribeOtaTopics()
+{
+    if (!mConnected) {
+        return -ENOTCONN;
+    }
+
+    struct mqtt_topic topics[2] = {};
+    topics[0].topic.utf8 = reinterpret_cast<const uint8_t *>(mOtaUpdater.GetCmdTopic());
+    topics[0].topic.size = static_cast<uint32_t>(strlen(mOtaUpdater.GetCmdTopic()));
+    topics[0].qos        = MQTT_QOS_0_AT_MOST_ONCE;
+
+    topics[1].topic.utf8 = reinterpret_cast<const uint8_t *>(mOtaUpdater.GetChunkTopic());
+    topics[1].topic.size = static_cast<uint32_t>(strlen(mOtaUpdater.GetChunkTopic()));
+    topics[1].qos        = MQTT_QOS_0_AT_MOST_ONCE;
+
+    struct mqtt_subscription_list subList{};
+    subList.list       = topics;
+    subList.list_count = 2u;
+    subList.message_id = mNextMsgId++;
+    if (mNextMsgId == 0u) {
+        mNextMsgId = 1u;
+    }
+
+    int ret = mqtt_subscribe(&mClient, &subList);
+    if (ret != 0) {
+        LOG_WRN("mqtt_subscribe for OTA topics failed (err=%d)", ret);
+        return ret;
+    }
+    PumpSocket(40);
+    LOG_INF("Subscribed to wireless FOTA topics: %s, %s",
+            mOtaUpdater.GetCmdTopic(),
+            mOtaUpdater.GetChunkTopic());
     return 0;
 }
 
@@ -521,13 +610,17 @@ void ThreadMqttPublisher::ProcessBackground()
 {
     if (mConnected) {
         PumpSocket(0);
+        // When a wireless FOTA session is streaming chunks, pump consecutive TCP frames rapidly
+        for (int i = 0; i < 8 && mConnected && mOtaUpdater.IsActive(); ++i) {
+            PumpSocket(5);
+        }
     }
 
     if (mConnected && mDiscoveryStep < kDiscoveryTotalSteps) {
         (void)PublishNextDiscoveryStep();
     }
 
-    if (mHasPendingPublish) {
+    if (mHasPendingPublish && !mOtaUpdater.IsActive()) {
         (void)TryFlushPending();
     }
 
@@ -536,10 +629,16 @@ void ThreadMqttPublisher::ProcessBackground()
 
         if (mConnected) {
             const int timeLeftMs = mqtt_keepalive_time_left(&mClient);
-            if (timeLeftMs >= 0 && timeLeftMs <= 5000) {
+            const int64_t nowMs  = k_uptime_get();
+            if (timeLeftMs >= 0 &&
+                timeLeftMs <= 15000 &&
+                (nowMs - mLastPingSentMs) >= 5000) {
                 SetFastPoll(true);
-                if (mqtt_live(&mClient) != 0) {
+                mLastPingSentMs = nowMs;
+                if (mqtt_ping(&mClient) != 0) {
                     DisconnectBroker();
+                } else {
+                    PumpSocket(40);
                 }
             }
         }

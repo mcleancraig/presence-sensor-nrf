@@ -6,6 +6,7 @@
 #include "../src/ld2410s_proto.h"
 #include "../src/bthome_proto.h"
 #include "../src/ha_mqtt_proto.h"
+#include "../src/ota_updater.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -528,11 +529,56 @@ static void TestLd2410sMotionTrackerKinematics()
         .distanceCm     = 85u,
         .distanceMm     = 850u,
         .isMinimalFrame = false,
+        .isLd2410cFrame = true,
     };
     tracker.Update(&r8Reenter, 56000);
     EXPECT_TRUE(r8Reenter.occupied, "Genuine LD2410C Moving frame >= 100 mm re-triggers occupied=true");
     EXPECT_TRUE(r8Reenter.motion, "Genuine LD2410C Moving frame >= 100 mm re-triggers motion=true");
     EXPECT_EQ(r8Reenter.distanceMm, 850u, "Genuine LD2410C Moving frame reports 850 mm");
+
+    // 9. Office seated scenario on HLK-LD2410C (seat ~1000 mm, max wall 2950 mm, hold 180000 ms):
+    //    Fine seated movement (0x03 Moving at 980 mm -> delta 20 mm < 100 mm) MUST reset the
+    //    motion & 180 s occupancy hold timers so the office light never turns off while seated!
+    tracker.Reset();
+    Ld2410sReport r9Entry = {
+        .state          = Ld2410sTargetState::Moving,
+        .occupied       = true,
+        .motion         = true,
+        .distanceCm     = 100u,
+        .distanceMm     = 1000u,
+        .isMinimalFrame = false,
+        .isLd2410cFrame = true,
+    };
+    tracker.Update(&r9Entry, 1000, 2950u, 180000);
+    EXPECT_TRUE(r9Entry.occupied && r9Entry.motion, "Office entry at 1000 mm sets occupied & motion");
+
+    // 120 seconds later, user shifts slightly in chair at 980 mm (delta = 20 mm < 100 mm, state = Moving):
+    Ld2410sReport r9SeatedShift = {
+        .state          = Ld2410sTargetState::Moving,
+        .occupied       = true,
+        .motion         = true,
+        .distanceCm     = 98u,
+        .distanceMm     = 980u,
+        .isMinimalFrame = false,
+        .isLd2410cFrame = true,
+    };
+    tracker.Update(&r9SeatedShift, 121000, 2950u, 180000);
+    EXPECT_TRUE(r9SeatedShift.occupied, "Seated 20 mm LD2410C Moving shift keeps occupied=true");
+    EXPECT_TRUE(r9SeatedShift.motion, "Seated 20 mm LD2410C Moving shift refreshes motion=true");
+    EXPECT_EQ(tracker.GetLastMotionTimestampMs(), 121000, "Seated LD2410C Moving shift resets hold timestamp to 121000 ms");
+
+    // Far-office movement at 2850 mm (<= 2950 mm office boundary) is accepted:
+    Ld2410sReport r9FarOffice = {
+        .state          = Ld2410sTargetState::Moving,
+        .occupied       = true,
+        .motion         = true,
+        .distanceCm     = 285u,
+        .distanceMm     = 2850u,
+        .isMinimalFrame = false,
+        .isLd2410cFrame = true,
+    };
+    tracker.Update(&r9FarOffice, 125000, 2950u, 180000);
+    EXPECT_TRUE(r9FarOffice.occupied, "2850 mm target inside 2950 mm office boundary stays occupied");
 }
 
 static void TestHaMqttDiscoveryAndNat64()
@@ -770,6 +816,79 @@ static void TestLd2410cParserStandardAndEngineeringFrames()
     EXPECT_EQ(decoded[2].ack.status, 0x0000u, "ACK status == 0x0000");
 }
 
+static void TestOtaProtocolAndValidation()
+{
+    // 1. IEEE 802.3 CRC-32 standard check vector ("123456789" -> 0xCBF43926)
+    const uint8_t checkVec[9] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    EXPECT_EQ(OtaProto::Crc32(checkVec, sizeof(checkVec)), 0xCBF43926u,
+              "IEEE 802.3 CRC-32 of '123456789' == 0xCBF43926");
+
+    // 2. Cortex-M4 vector table validation (valid nRF52840 Slot 0 image vs invalid)
+    const uint8_t validVec[16] = {
+        0x00, 0x00, 0x02, 0x20, // Initial MSP = 0x20020000 (valid SRAM)
+        0xC9, 0x45, 0x01, 0x00, // Reset_Handler = 0x000145C9 (Thumb bit set, inside Slot 0)
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    };
+    EXPECT_TRUE(OtaProto::ValidateCortexM4VectorTable(validVec, sizeof(validVec)),
+                "Valid Cortex-M4 vector table accepted");
+
+    const uint8_t badMspVec[8] = {
+        0x00, 0x00, 0x00, 0x10, // Invalid MSP outside SRAM
+        0xC9, 0x45, 0x01, 0x00,
+    };
+    EXPECT_TRUE(!OtaProto::ValidateCortexM4VectorTable(badMspVec, sizeof(badMspVec)),
+                "Invalid MSP rejected");
+
+    const uint8_t nonThumbPcVec[8] = {
+        0x00, 0x00, 0x02, 0x20,
+        0xC8, 0x45, 0x01, 0x00, // Even PC (Thumb bit 0 cleared) -> invalid on Cortex-M4
+    };
+    EXPECT_TRUE(!OtaProto::ValidateCortexM4VectorTable(nonThumbPcVec, sizeof(nonThumbPcVec)),
+                "Non-Thumb Reset_Handler rejected");
+
+    // 3. OTA Topic Formatters
+    char cmdTopic[OtaProto::kMaxOtaTopicLen]    = {};
+    char chunkTopic[OtaProto::kMaxOtaTopicLen]  = {};
+    char statusTopic[OtaProto::kMaxOtaTopicLen] = {};
+    EXPECT_TRUE(OtaProto::FormatCmdTopic("presence_70ed", cmdTopic, sizeof(cmdTopic)) > 0u,
+                "FormatCmdTopic succeeds");
+    EXPECT_TRUE(OtaProto::FormatChunkTopic("presence_70ed", chunkTopic, sizeof(chunkTopic)) > 0u,
+                "FormatChunkTopic succeeds");
+    EXPECT_TRUE(OtaProto::FormatStatusTopic("presence_70ed", statusTopic, sizeof(statusTopic)) > 0u,
+                "FormatStatusTopic succeeds");
+    EXPECT_EQ(strcmp(cmdTopic, "presence_sensor/presence_70ed/ota/cmd"), 0, "OTA cmd topic");
+    EXPECT_EQ(strcmp(chunkTopic, "presence_sensor/presence_70ed/ota/chunk"), 0, "OTA chunk topic");
+    EXPECT_EQ(strcmp(statusTopic, "presence_sensor/presence_70ed/ota/status"), 0, "OTA status topic");
+
+    // 4. OTA Command JSON Parser
+    OtaCommand cmd{};
+    const char *beginJson = "{\"action\":\"begin\",\"size\":311296,\"crc32\":3421796646}";
+    EXPECT_TRUE(OtaProto::ParseCommandJson(beginJson, strlen(beginJson), &cmd),
+                "Parse OTA begin command");
+    EXPECT_EQ(static_cast<uint8_t>(cmd.action), static_cast<uint8_t>(OtaCommandAction::Begin),
+              "OTA action == Begin");
+    EXPECT_EQ(cmd.size, 311296u, "OTA begin size == 311296");
+    EXPECT_EQ(cmd.crc32, 3421796646u, "OTA begin crc32 == 3421796646");
+
+    const char *bootJson = "{\"action\":\"bootloader\"}";
+    EXPECT_TRUE(OtaProto::ParseCommandJson(bootJson, strlen(bootJson), &cmd),
+                "Parse OTA bootloader command");
+    EXPECT_EQ(static_cast<uint8_t>(cmd.action), static_cast<uint8_t>(OtaCommandAction::Bootloader),
+              "OTA action == Bootloader");
+
+    // 5. OTA Chunk Header Parser
+    const uint8_t sampleChunk[8] = {0x00, 0x12, 0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF};
+    uint32_t offset      = 0u;
+    const uint8_t *data  = nullptr;
+    size_t dataLen       = 0u;
+    EXPECT_TRUE(OtaProto::ParseChunkHeader(sampleChunk, sizeof(sampleChunk), &offset, &data, &dataLen),
+                "Parse valid OTA chunk header");
+    EXPECT_EQ(offset, 0x00001200u, "Chunk offset == 0x1200");
+    EXPECT_EQ(dataLen, 4u, "Chunk payload length == 4");
+    EXPECT_EQ(data[0], 0xDEu, "Chunk byte 0 == 0xDE");
+}
+
 int main()
 {
     TestLd2410sCommandBuilders();
@@ -779,12 +898,13 @@ int main()
     TestBthomeV2EncodingAndSpecCompliance();
     TestLd2410sMotionTrackerKinematics();
     TestHaMqttDiscoveryAndNat64();
+    TestOtaProtocolAndValidation();
 
     if (sTestsFailed > 0) {
         fprintf(stderr, "FAILED: %d/%d assertions failed\n", sTestsFailed, sTestsRun);
         return EXIT_FAILURE;
     }
 
-    printf("PASSED: All %d protocol assertions succeeded (HLK-LD2410S/C + BTHome v2 + HA MQTT/NAT64)\n", sTestsRun);
+    printf("PASSED: All %d protocol assertions succeeded (HLK-LD2410S/C + BTHome v2 + HA MQTT/NAT64 + FOTA)\n", sTestsRun);
     return EXIT_SUCCESS;
 }

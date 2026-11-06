@@ -32,7 +32,7 @@ SensorLd2410s::SensorLd2410s()
     : mUartDev(DEVICE_DT_GET_OR_NULL(DT_NODELABEL(uart0))),
       mOt2Gpio(GPIO_DT_SPEC_GET_OR(ZEPHYR_USER_NODE, presence_ot2_gpios, {0})),
       mEdgeCallback(nullptr),
-      mLastValidReport{Ld2410sTargetState::Unoccupied, false, false, 0, 0, true},
+      mLastValidReport{Ld2410sTargetState::Unoccupied, false, false, 0, 0, true, false},
       mLastUartReportMs(0),
       mRxRing{},
       mRxHead(0),
@@ -187,8 +187,8 @@ void SensorLd2410s::LogRxRingPreview(const char *stageTag) const
 
 void SensorLd2410s::ParseBufferedBootReports()
 {
-    static constexpr uint16_t kMaxBathroomDistanceMm =
-        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kActiveGateWidthMm);
+    static constexpr uint16_t kMaxDistanceMm =
+        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_DISTANCE_MM);
 
     uint8_t rxByte = 0;
     while (PopRxByte(&rxByte)) {
@@ -196,7 +196,7 @@ void SensorLd2410s::ParseBufferedBootReports()
         if (mParser.PushByte(rxByte, &frame) && frame.type == Ld2410sFrameType::Report) {
             if (!frame.report.occupied ||
                 frame.report.distanceMm == 0u ||
-                frame.report.distanceMm > kMaxBathroomDistanceMm) {
+                frame.report.distanceMm > kMaxDistanceMm) {
                 frame.report.state      = Ld2410sTargetState::Unoccupied;
                 frame.report.occupied   = false;
                 frame.report.motion     = false;
@@ -238,6 +238,9 @@ int SensorLd2410s::ResumeUart()
 
 int SensorLd2410s::SuspendUart()
 {
+    if (IS_ENABLED(CONFIG_APP_ALWAYS_USB_POWERED)) {
+        return 0;
+    }
     if (!mUartDev || !device_is_ready(mUartDev)) {
         return -ENODEV;
     }
@@ -557,29 +560,47 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
 
     ResumeUart();
 
-    static constexpr uint16_t kMaxBathroomDistanceMm =
-        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kActiveGateWidthMm);
+    static constexpr uint16_t kMaxDistanceMm =
+        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_DISTANCE_MM);
 
     auto drainFramesFromRing = [&]() -> bool {
-        bool decodedAny = false;
-        uint8_t rxByte  = 0;
+        bool decodedAny         = false;
+        bool sawMovingInBatch   = false;
+        uint16_t movingDistCm   = 0u;
+        uint16_t movingDistMm   = 0u;
+        uint8_t rxByte          = 0;
         while (PopRxByte(&rxByte)) {
             Ld2410sParsedFrame frame{};
             if (mParser.PushByte(rxByte, &frame) && frame.type == Ld2410sFrameType::Report) {
                 if (!frame.report.occupied ||
                     frame.report.distanceMm == 0u ||
-                    frame.report.distanceMm > kMaxBathroomDistanceMm) {
+                    frame.report.distanceMm > kMaxDistanceMm) {
                     frame.report.state      = Ld2410sTargetState::Unoccupied;
                     frame.report.occupied   = false;
                     frame.report.motion     = false;
                     frame.report.distanceCm = 0u;
                     frame.report.distanceMm = 0u;
+                } else if (frame.report.motion || frame.report.state == Ld2410sTargetState::Moving) {
+                    sawMovingInBatch = true;
+                    movingDistCm     = frame.report.distanceCm;
+                    movingDistMm     = frame.report.distanceMm;
                 }
                 mLastValidReport    = frame.report;
                 mHasValidUartReport = true;
                 mLastUartReportMs   = k_uptime_get();
                 mLastDistanceMm     = frame.report.occupied ? frame.report.distanceMm : 0u;
                 decodedAny          = true;
+            }
+        }
+        // Preserve Moving state across a multi-frame batch so a trailing Stationary (0x02) frame
+        // never masks an earlier Moving (0x01/0x03) frame buffered in the same poll window.
+        if (decodedAny && sawMovingInBatch && mLastValidReport.occupied) {
+            mLastValidReport.state      = Ld2410sTargetState::Moving;
+            mLastValidReport.motion     = true;
+            if (movingDistMm > 0u) {
+                mLastValidReport.distanceCm = movingDistCm;
+                mLastValidReport.distanceMm = movingDistMm;
+                mLastDistanceMm             = movingDistMm;
             }
         }
         return decodedAny;
@@ -618,22 +639,24 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
     //      to hardware OT2/OUT occupancy with a nominal 1000 mm in-range distance.
     //    - If UART was previously active and OT2 is HIGH while last distance was in range, preserve it.
     const uint16_t fallbackDistMm = (!mHasValidUartReport && mLastDistanceMm == 0u) ? 1000u : mLastDistanceMm;
-    if (pinOccupied && fallbackDistMm > 0u && fallbackDistMm <= kMaxBathroomDistanceMm) {
+    if (pinOccupied && fallbackDistMm > 0u && fallbackDistMm <= kMaxDistanceMm) {
         outReport->state          = Ld2410sTargetState::Stationary;
         outReport->occupied       = true;
         outReport->motion         = false;
         outReport->distanceMm     = fallbackDistMm;
         outReport->distanceCm     = static_cast<uint16_t>(fallbackDistMm / 10u);
         outReport->isMinimalFrame = true;
+        outReport->isLd2410cFrame = false;
     } else {
         mLastDistanceMm           = 0;
-        mLastValidReport          = {Ld2410sTargetState::Unoccupied, false, false, 0, 0, true};
+        mLastValidReport          = {Ld2410sTargetState::Unoccupied, false, false, 0, 0, true, false};
         outReport->state          = Ld2410sTargetState::Unoccupied;
         outReport->occupied       = false;
         outReport->motion         = false;
         outReport->distanceMm     = 0;
         outReport->distanceCm     = 0;
         outReport->isMinimalFrame = true;
+        outReport->isLd2410cFrame = false;
     }
     return 0;
 }

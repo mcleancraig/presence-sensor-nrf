@@ -22,6 +22,7 @@ target_sources(app PRIVATE
     src/sensor_ld2410s.cpp
     src/bthome_proto.cpp
     src/ha_mqtt_proto.cpp
+    src/ota_updater.cpp
     src/thread_mqtt_publisher.cpp
     src/status_led.cpp
 )

@@ -11,6 +11,7 @@ OUT_BIN="tests/test_protocols"
     src/ld2410s_proto.cpp \
     src/bthome_proto.cpp \
     src/ha_mqtt_proto.cpp \
+    src/ota_updater.cpp \
     tests/test_protocols.cpp \
     -o "$OUT_BIN"
 
