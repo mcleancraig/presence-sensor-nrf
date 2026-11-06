@@ -27,6 +27,13 @@ static constexpr size_t kMaxDiscoveryJsonLen  = 512u;
 
 static constexpr const char *kAvailabilityOnline  = "online";
 static constexpr const char *kAvailabilityOffline = "offline";
+static constexpr const char *kModelLd2410s        = "HLK-LD2410S Thread SED";
+static constexpr const char *kModelLd2410c        = "HLK-LD2410C Thread SED";
+#if defined(CONFIG_APP_RADAR_LD2410C)
+static constexpr const char *kActiveRadarModelName = kModelLd2410c;
+#else
+static constexpr const char *kActiveRadarModelName = kModelLd2410s;
+#endif
 
 /**
  * @brief Derive deterministic lowercase node slug "presence_xxxx" from hardware FICR device ID.

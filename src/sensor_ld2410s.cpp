@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2026 Craig McLean
- * Zephyr HLK-LD2410S 24 GHz mmWave Radar Driver (OT2 Edge Wake + UART0 Runtime PM)
+ * Zephyr HLK-LD2410S / HLK-LD2410C 24 GHz mmWave Radar Driver (OT2/OUT Edge Wake + UART0 Runtime PM)
  */
 
 #include "sensor_ld2410s.h"
@@ -16,32 +16,15 @@ LOG_MODULE_REGISTER(sensor_ld2410s, LOG_LEVEL_INF);
 
 namespace {
 
-// RAII scope guard ensuring uart0 is always suspended when leaving a transaction
-class ScopedUartWake {
-public:
-    ScopedUartWake(int (*resumeFn)(void *), int (*suspendFn)(void *), void *ctx)
-        : mSuspendFn(suspendFn), mCtx(ctx), mActive(false)
-    {
-        if (resumeFn(mCtx) == 0) {
-            mActive = true;
-        }
-    }
-
-    ~ScopedUartWake()
-    {
-        if (mActive && mSuspendFn) {
-            mSuspendFn(mCtx);
-        }
-    }
-
-    ScopedUartWake(const ScopedUartWake &) = delete;
-    ScopedUartWake &operator=(const ScopedUartWake &) = delete;
-
-private:
-    int (*mSuspendFn)(void *);
-    void *mCtx;
-    bool mActive;
-};
+#if defined(CONFIG_APP_RADAR_LD2410C)
+static constexpr const char *kRadarModelTag        = "HLK-LD2410C";
+static constexpr uint32_t    kPrimaryUartBaudReg   = static_cast<uint32_t>(NRF_UARTE_BAUDRATE_250000);
+static constexpr uint32_t    kFallbackUartBaudReg  = static_cast<uint32_t>(NRF_UARTE_BAUDRATE_115200);
+#else
+static constexpr const char *kRadarModelTag        = "HLK-LD2410S";
+static constexpr uint32_t    kPrimaryUartBaudReg   = static_cast<uint32_t>(NRF_UARTE_BAUDRATE_115200);
+static constexpr uint32_t    kFallbackUartBaudReg  = static_cast<uint32_t>(NRF_UARTE_BAUDRATE_250000);
+#endif
 
 } // namespace
 
@@ -55,6 +38,7 @@ SensorLd2410s::SensorLd2410s()
       mRxHead(0),
       mRxTail(0),
       mRxBytesSeen(0),
+      mUartBaudrateReg(kPrimaryUartBaudReg),
       mLastDistanceMm(0),
       mHasValidUartReport(false),
       mSwapRxTxPins(false),
@@ -120,13 +104,24 @@ void SensorLd2410s::ApplyUartPinMapping(bool swapPins)
     const uint32_t rxPin = swapPins ? kUartAltRxPin : kUartDefaultRxPin;
     const uint32_t txPin = swapPins ? kUartAltTxPin : kUartDefaultTxPin;
 
+    if (mUartDev && mUartSuspended) {
+        (void)pm_device_action_run(mUartDev, PM_DEVICE_ACTION_RESUME);
+        mUartSuspended = false;
+        k_busy_wait(200);
+    }
+
     if (mUartDev) {
         uart_irq_rx_disable(mUartDev);
         uart_irq_err_disable(mUartDev);
     }
 
-    nrf_uarte_task_trigger(NRF_UARTE0, NRF_UARTE_TASK_STOPRX);
-    k_busy_wait(100);
+    if (nrf_uarte_event_check(NRF_UARTE0, NRF_UARTE_EVENT_RXSTARTED)) {
+        nrf_uarte_event_clear(NRF_UARTE0, NRF_UARTE_EVENT_RXTO);
+        nrf_uarte_task_trigger(NRF_UARTE0, NRF_UARTE_TASK_STOPRX);
+        for (int i = 0; i < 200 && !nrf_uarte_event_check(NRF_UARTE0, NRF_UARTE_EVENT_RXTO); ++i) {
+            k_busy_wait(10);
+        }
+    }
     nrf_uarte_disable(NRF_UARTE0);
 
     nrf_gpio_pin_set(txPin);
@@ -143,12 +138,14 @@ void SensorLd2410s::ApplyUartPinMapping(bool swapPins)
                  NRF_GPIO_PIN_S0S1,
                  NRF_GPIO_PIN_NOSENSE);
 
+    nrf_uarte_baudrate_set(NRF_UARTE0, static_cast<nrf_uarte_baudrate_t>(mUartBaudrateReg));
     nrf_uarte_txrx_pins_set(NRF_UARTE0, txPin, rxPin);
-    nrf_uarte_enable(NRF_UARTE0);
+    (void)nrf_uarte_errorsrc_get_and_clear(NRF_UARTE0);
     nrf_uarte_event_clear(NRF_UARTE0, NRF_UARTE_EVENT_ERROR);
     nrf_uarte_event_clear(NRF_UARTE0, NRF_UARTE_EVENT_ENDRX);
     nrf_uarte_event_clear(NRF_UARTE0, NRF_UARTE_EVENT_RXTO);
     nrf_uarte_event_clear(NRF_UARTE0, NRF_UARTE_EVENT_RXSTARTED);
+    nrf_uarte_enable(NRF_UARTE0);
     nrf_uarte_task_trigger(NRF_UARTE0, NRF_UARTE_TASK_STARTRX);
 
     if (mUartDev) {
@@ -158,10 +155,40 @@ void SensorLd2410s::ApplyUartPinMapping(bool swapPins)
     DrainUartRx();
 }
 
+void SensorLd2410s::LogRxRingPreview(const char *stageTag) const
+{
+    const uint32_t errSrc = nrf_uarte_errorsrc_get_and_clear(NRF_UARTE0);
+    const uint32_t tail   = mRxTail;
+    const uint32_t head   = mRxHead;
+    const uint32_t avail  = (head >= tail) ? (head - tail) : (kRxRingSize - tail + head);
+
+    static constexpr char kHexDigits[17] = "0123456789ABCDEF";
+    char hexBuf[64];
+    size_t pos = 0;
+    const uint32_t maxPreview = (avail < 16u) ? avail : 16u;
+    for (uint32_t i = 0; i < maxPreview && (pos + 4u) < sizeof(hexBuf); ++i) {
+        const uint8_t b = mRxRing[(tail + i) % kRxRingSize];
+        hexBuf[pos++] = kHexDigits[(b >> 4) & 0x0Fu];
+        hexBuf[pos++] = kHexDigits[b & 0x0Fu];
+        hexBuf[pos++] = ' ';
+    }
+    hexBuf[pos] = '\0';
+
+    LOG_INF("[%s] rx_bytes=%u ring_avail=%u errsrc=0x%02X ot2_pin=%d baud_reg=0x%08X swap=%d sample=[%s]",
+            stageTag ? stageTag : "uart",
+            mRxBytesSeen,
+            avail,
+            errSrc,
+            ReadPinOccupancy() ? 1 : 0,
+            mUartBaudrateReg,
+            mSwapRxTxPins ? 1 : 0,
+            hexBuf);
+}
+
 void SensorLd2410s::ParseBufferedBootReports()
 {
     static constexpr uint16_t kMaxBathroomDistanceMm =
-        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kGateWidthMm);
+        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kActiveGateWidthMm);
 
     uint8_t rxByte = 0;
     while (PopRxByte(&rxByte)) {
@@ -197,10 +224,8 @@ int SensorLd2410s::ResumeUart()
         }
         mUartSuspended = false;
         k_busy_wait(200);
-        if (mSwapRxTxPins) {
-            ApplyUartPinMapping(true);
-            return 0;
-        }
+        ApplyUartPinMapping(mSwapRxTxPins);
+        return 0;
     }
     nrf_uarte_enable(NRF_UARTE0);
     if (!nrf_uarte_event_check(NRF_UARTE0, NRF_UARTE_EVENT_RXSTARTED)) {
@@ -294,9 +319,7 @@ int SensorLd2410s::ConfigureRadarParameters()
         return -ENODEV;
     }
 
-    auto resumeCb = [](void *ctx) -> int { return static_cast<SensorLd2410s *>(ctx)->ResumeUart(); };
-    auto suspendCb = [](void *ctx) -> int { return static_cast<SensorLd2410s *>(ctx)->SuspendUart(); };
-    ScopedUartWake uartWake(resumeCb, suspendCb, this);
+    (void)ResumeUart();
 
     uint8_t cmdBuf[64];
 
@@ -312,12 +335,40 @@ int SensorLd2410s::ConfigureRadarParameters()
     }
 
     if (!entered) {
-        LOG_WRN("HLK-LD2410S did not ACK EnterConfig (0x00FF); proceeding with OT2 GPIO + default radar profile");
+        LOG_WRN("%s did not ACK EnterConfig (0x00FF); proceeding with OT2/OUT GPIO + default radar profile",
+                kRadarModelTag);
         return -ETIMEDOUT;
     }
 
     k_msleep(kInterCommandDelayMs);
 
+#if defined(CONFIG_APP_RADAR_LD2410C)
+    // 2. Write HLK-LD2410C max moving/stationary gate & unoccupied duration (0x0060)
+    const Ld2410cConfigParams cParams = {
+        .maxMovingGate     = static_cast<uint32_t>(CONFIG_APP_RADAR_MAX_GATE),
+        .maxStationaryGate = static_cast<uint32_t>(CONFIG_APP_RADAR_MAX_GATE),
+        .unoccupiedHoldSec = static_cast<uint32_t>(CONFIG_APP_RADAR_HOLD_S),
+    };
+
+    const size_t writeLen = Ld2410sProto::BuildLd2410cWriteMaxGateAndHoldCmd(cParams, cmdBuf, sizeof(cmdBuf));
+    if (!SendCommandAndWaitAck(cmdBuf, writeLen, Ld2410sProto::kCmdWriteMaxGateAndHold, kAckTimeoutMs)) {
+        LOG_WRN("HLK-LD2410C did not ACK WriteMaxGateAndHold (0x0060)");
+    }
+
+    k_msleep(kInterCommandDelayMs);
+
+    // 3. Exit configuration mode (0x00FE)
+    const size_t exitLen = Ld2410sProto::BuildExitConfigCmd(cmdBuf, sizeof(cmdBuf));
+    if (!SendCommandAndWaitAck(cmdBuf, exitLen, Ld2410sProto::kCmdExitConfig, kAckTimeoutMs)) {
+        LOG_WRN("HLK-LD2410C did not ACK ExitConfig (0x00FE)");
+    }
+
+    mRadarConfigured = true;
+    LOG_INF("HLK-LD2410C configured (max_gate=%d [%.2f m], hold=%d s, 256000 baud)",
+            CONFIG_APP_RADAR_MAX_GATE,
+            static_cast<double>(CONFIG_APP_RADAR_MAX_GATE) * 0.75,
+            CONFIG_APP_RADAR_HOLD_S);
+#else
     // 2. Write 3 m^3 bathroom gate & hold parameters (0x0070)
     const Ld2410sConfigParams params = {
         .farthestGate           = static_cast<uint32_t>(CONFIG_APP_RADAR_MAX_GATE),
@@ -356,6 +407,7 @@ int SensorLd2410s::ConfigureRadarParameters()
             static_cast<double>(CONFIG_APP_RADAR_MAX_GATE) * 0.7,
             CONFIG_APP_RADAR_MIN_GATE,
             CONFIG_APP_RADAR_HOLD_S);
+#endif
     return 0;
 }
 
@@ -394,37 +446,73 @@ int SensorLd2410s::Init(Ot2EdgeCallback edgeCb)
         return ret;
     }
 
-    LOG_INF("HLK-LD2410S OT2 interrupt armed on P0.%02d (GPIO_INT_EDGE_BOTH)", mOt2Gpio.pin);
+    LOG_INF("%s OT2/OUT interrupt armed on P0.%02d (GPIO_INT_EDGE_BOTH, initial_pin=%d)",
+            kRadarModelTag, mOt2Gpio.pin, ReadPinOccupancy() ? 1 : 0);
 
-    // Enable UART0 RX before the 1000 ms boot settle window so any boot stream frames
-    // emitted by the HLK-LD2410S (PY32F030 MCU + ICL1112 MMIC) are captured in mRxRing.
+    // Apply primary UART baudrate (256000/250000 for LD2410C, 115200 for LD2410S) and enable RX
+    // before the 1000 ms boot settle window so any boot stream frames are captured in mRxRing.
+    ApplyUartPinMapping(false);
     ResumeUart();
     k_msleep(kRadarBootSettleMs);
 
-    LOG_INF("HLK-LD2410S boot settle complete (rx_bytes=%u on RX=P0.08, TX=P0.06)", mRxBytesSeen);
+    LogRxRingPreview("boot-default");
     ParseBufferedBootReports();
 
     ConfigureRadarParameters();
+    if (!mHasValidUartReport) {
+        k_msleep(250);
+        ParseBufferedBootReports();
+    }
 
     // If no valid report frame arrived on the default pin mapping (RX=P0.08, TX=P0.06) and
-    // configuration did not ACK, automatically probe swapped pins (RX=P0.06, TX=P0.08).
+    // configuration did not ACK, automatically probe swapped pins and fallback baudrates.
     if (!mHasValidUartReport && !mRadarConfigured) {
         LOG_WRN("No valid frame/ACK on default UART pins (RX=P0.08, TX=P0.06, rx_bytes=%u); probing swapped pins (RX=P0.06, TX=P0.08)",
                 mRxBytesSeen);
         ApplyUartPinMapping(true);
         k_msleep(kPinSwapProbeSettleMs);
+        LogRxRingPreview("probe-swap-primary");
         ParseBufferedBootReports();
         if (ConfigureRadarParameters() == 0 || mHasValidUartReport) {
-            LOG_INF("HLK-LD2410S active on swapped UART pins (RX=P0.06, TX=P0.08, rx_bytes=%u)", mRxBytesSeen);
+            LOG_INF("%s active on swapped UART pins (RX=P0.06, TX=P0.08, rx_bytes=%u)", kRadarModelTag, mRxBytesSeen);
         } else {
-            LOG_WRN("No response on swapped UART pins; restoring default mapping (RX=P0.08, TX=P0.06)");
+            // Probe fallback UART baudrate (115200 <-> 256000) on default pins
+            mUartBaudrateReg = kFallbackUartBaudReg;
             ApplyUartPinMapping(false);
+            k_msleep(kPinSwapProbeSettleMs);
+            LogRxRingPreview("probe-default-fallback");
+            ParseBufferedBootReports();
+            if (ConfigureRadarParameters() == 0 || mHasValidUartReport) {
+                LOG_INF("%s active on fallback baudrate (RX=P0.08, TX=P0.06, rx_bytes=%u)", kRadarModelTag, mRxBytesSeen);
+            } else {
+                // Probe fallback UART baudrate on swapped pins
+                ApplyUartPinMapping(true);
+                k_msleep(kPinSwapProbeSettleMs);
+                LogRxRingPreview("probe-swap-fallback");
+                ParseBufferedBootReports();
+                if (ConfigureRadarParameters() == 0 || mHasValidUartReport) {
+                    LOG_INF("%s active on swapped pins + fallback baudrate (RX=P0.06, TX=P0.08, rx_bytes=%u)",
+                            kRadarModelTag, mRxBytesSeen);
+                } else {
+                    LOG_WRN("No response on swapped pins or fallback baudrate; restoring primary UART config");
+                    mUartBaudrateReg = kPrimaryUartBaudReg;
+                    ApplyUartPinMapping(false);
+                }
+            }
         }
     }
 
     // Keep uart0 RX continuously active in interrupt mode so OnUartIsr captures 100%
     // of asynchronous 5-byte / Standard radar frames into mRxRing with zero blind spots.
     ResumeUart();
+    LOG_INF("%s Init done: valid_uart=%d cfg=%d swap=%d baud_reg=0x%08X rx_bytes=%u ot2_pin=%d",
+            kRadarModelTag,
+            mHasValidUartReport ? 1 : 0,
+            mRadarConfigured ? 1 : 0,
+            mSwapRxTxPins ? 1 : 0,
+            mUartBaudrateReg,
+            mRxBytesSeen,
+            ReadPinOccupancy() ? 1 : 0);
 
     return 0;
 }
@@ -435,6 +523,25 @@ bool SensorLd2410s::ReadPinOccupancy() const
         return false;
     }
     return gpio_pin_get_dt(&mOt2Gpio) > 0;
+}
+
+void SensorLd2410s::LogDiagnostics(const Ld2410sReport &report, const char *reasonTag) const
+{
+    const uint32_t errSrc = nrf_uarte_errorsrc_get_and_clear(NRF_UARTE0);
+    LOG_INF("[%s] occ=%s motion=%s state=%u dist=%u mm | ot2_pin=%d ot2_seen=%d rx_bytes=%u valid_uart=%d cfg=%d swap=%d baud=0x%08X err=0x%02X",
+            reasonTag ? reasonTag : "poll",
+            report.occupied ? "ON" : "OFF",
+            report.motion ? "ON" : "OFF",
+            static_cast<unsigned int>(report.state),
+            static_cast<unsigned int>(report.distanceMm),
+            ReadPinOccupancy() ? 1 : 0,
+            mOt2SignalSeen ? 1 : 0,
+            mRxBytesSeen,
+            mHasValidUartReport ? 1 : 0,
+            mRadarConfigured ? 1 : 0,
+            mSwapRxTxPins ? 1 : 0,
+            mUartBaudrateReg,
+            errSrc);
 }
 
 int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeoutMs)
@@ -451,7 +558,7 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
     ResumeUart();
 
     static constexpr uint16_t kMaxBathroomDistanceMm =
-        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kGateWidthMm);
+        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kActiveGateWidthMm);
 
     auto drainFramesFromRing = [&]() -> bool {
         bool decodedAny = false;
@@ -506,14 +613,17 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
         k_sem_take(&mRxSem, K_MSEC(remainingMs));
     }
 
-    // 4. UART has been silent for > 2.5 s: if OT2 is LOW (or last distance was out of bounds),
-    //    clear state to Unoccupied; only fall back to OT2 if OT2 is HIGH and last distance was in range.
-    if (pinOccupied && mLastDistanceMm > 0u && mLastDistanceMm <= kMaxBathroomDistanceMm) {
+    // 4. UART has been silent for > 2.5 s:
+    //    - If UART has never decoded a frame (!mHasValidUartReport) and OT2/OUT is HIGH, fall back
+    //      to hardware OT2/OUT occupancy with a nominal 1000 mm in-range distance.
+    //    - If UART was previously active and OT2 is HIGH while last distance was in range, preserve it.
+    const uint16_t fallbackDistMm = (!mHasValidUartReport && mLastDistanceMm == 0u) ? 1000u : mLastDistanceMm;
+    if (pinOccupied && fallbackDistMm > 0u && fallbackDistMm <= kMaxBathroomDistanceMm) {
         outReport->state          = Ld2410sTargetState::Stationary;
         outReport->occupied       = true;
         outReport->motion         = false;
-        outReport->distanceMm     = mLastDistanceMm;
-        outReport->distanceCm     = static_cast<uint16_t>(mLastDistanceMm / 10u);
+        outReport->distanceMm     = fallbackDistMm;
+        outReport->distanceCm     = static_cast<uint16_t>(fallbackDistMm / 10u);
         outReport->isMinimalFrame = true;
     } else {
         mLastDistanceMm           = 0;

@@ -1,8 +1,9 @@
 """
-Geometry and clearance checks for all 3 presence sensor enclosure models:
-  - Model 1: Sealed Gasketed Wall-Mount (base, lid)
-  - Model 2: Angled 45 deg Corner/Ceiling Snap-Fit (corner_base, corner_lid, corner_bracket)
-  - Model 3: Freestanding Shelf/Vanity Pod with USB-C Pass-Through (vanity_base, vanity_lid)
+Geometry and clearance checks for all 4 presence sensor enclosure models:
+  - Model 1: Sealed Gasketed Wall-Mount (base, lid — HLK-LD2410S)
+  - Model 2: Angled 45 deg Corner/Ceiling Snap-Fit (corner_base, corner_lid, corner_bracket — HLK-LD2410S)
+  - Model 3: Freestanding Shelf/Vanity Pod with USB-C Pass-Through (vanity_base, vanity_lid — HLK-LD2410S)
+  - Model 4: HLK-LD2410C Constant USB-C Power Enclosure (ld2410c_base, ld2410c_lid — 22x16 mm HLK-LD2410C)
 
 Run:  python verify.py              (exits non-zero on any failure)
 """
@@ -65,6 +66,7 @@ def main() -> int:
     ev.build_variants(out_dir)
     c_base, c_lid, c_br = ev.make_corner_base(), ev.make_corner_lid(), ev.make_corner_bracket()
     v_base, v_lid, dm3 = ev.make_vanity_base(), ev.make_vanity_lid(), ev.make_vanity_dummies()
+    lc_base, lc_lid, dm4 = ev.make_ld2410c_base(), ev.make_ld2410c_lid(), ev.make_ld2410c_dummies()
 
     failures: list[str] = []
     for name, wp in [
@@ -75,6 +77,8 @@ def main() -> int:
         ("corner_bracket", c_br),
         ("vanity_base", v_base),
         ("vanity_lid", v_lid),
+        ("ld2410c_base", lc_base),
+        ("ld2410c_lid", lc_lid),
     ]:
         _check_solid(name, wp, failures)
 
@@ -83,6 +87,7 @@ def main() -> int:
     _check_pair("corner_bracket", c_br, "corner_base", c_base, failures)
     _check_pair("corner_bracket", c_br, "corner_lid", c_lid, failures)
     _verify_model_overlaps("vanity_base", v_base, "vanity_lid", v_lid, dm3, failures)
+    _verify_model_overlaps("ld2410c_base", lc_base, "ld2410c_lid", lc_lid, dm4, failures)
 
     reach = e.DIMPLE_H + e.CAP_RISE - (e.SLOT_T - e.PLATE_T) - e.BLOCK_LIP
     print(f"ok   + contact reaches {reach:.2f} mm past the lip face (must be >= 0.30 mm)")
@@ -97,13 +102,18 @@ def main() -> int:
     )
     if not ok_rim:
         failures.append(f"lid embossed rim X=[{rim_bb.xmin:.2f}..{rim_bb.xmax:.2f}] outside base groove")
-    rad_probe = cq.Workplane("XY").box(1.0, 1.0, 100.0).translate((e.RADAR_X, e.Y_RADAR, 0.0))
-    for l_name, l_wp in [("lid", lid), ("corner_lid", c_lid), ("vanity_lid", v_lid)]:
+    for l_name, l_wp, rx, ry, r_rail_h in [
+        ("lid", lid, e.RADAR_X, e.Y_RADAR, e.RADAR_RAIL_H),
+        ("corner_lid", c_lid, e.RADAR_X, e.Y_RADAR, e.RADAR_RAIL_H),
+        ("vanity_lid", v_lid, e.RADAR_X, e.Y_RADAR, e.RADAR_RAIL_H),
+        ("ld2410c_lid", lc_lid, ev.RADAR_C_X, ev.Y_C, ev.RADAR_C_RAIL_H),
+    ]:
+        rad_probe = cq.Workplane("XY").box(1.0, 1.0, 100.0).translate((rx, ry, 0.0))
         r_bb = l_wp.intersect(rad_probe).val().BoundingBox()
         r_thk = r_bb.zlen
-        air_gap = r_bb.zmin - (e.FLOOR + e.RADAR_RAIL_H + e.RADAR_T)
+        air_gap = r_bb.zmin - (e.FLOOR + r_rail_h + e.RADAR_T)
         ok_r = 0.8 <= r_thk <= 1.6 and 3.0 <= air_gap <= 6.0
-        print(f"ok   {l_name:10s} blind RF radome (22x22 mm) thickness={r_thk:.2f} mm, air gap={air_gap:.2f} mm")
+        print(f"ok   {l_name:12s} blind RF radome thickness={r_thk:.2f} mm, air gap={air_gap:.2f} mm")
         if not ok_r:
             failures.append(f"{l_name} radome check failed: thk={r_thk:.2f}, gap={air_gap:.2f}")
 

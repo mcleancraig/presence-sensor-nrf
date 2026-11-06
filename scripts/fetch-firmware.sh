@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # Download zephyr.uf2 from the latest successful CI build of the current branch.
-# Usage: scripts/fetch-firmware.sh [--debug] [branch]   (output: build/zephyr/zephyr.uf2)
-#   --debug  fetch the USB-logging debug build instead of the release build
+# Usage: scripts/fetch-firmware.sh [--ld2410c] [--debug] [branch]   (output: build/zephyr/zephyr.uf2)
+#   --ld2410c  fetch the HLK-LD2410C radar variant instead of the default HLK-LD2410S build
+#   --debug    fetch the USB-logging debug build instead of the release build
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-ARTIFACT=firmware
-if [[ "${1:-}" == "--debug" ]]; then
-    ARTIFACT=firmware-debug
-    shift
-fi
+MODEL=""
+DEBUG=""
+while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+        --ld2410c) MODEL="-ld2410c"; shift ;;
+        --debug)   DEBUG="-debug"; shift ;;
+        *) echo "Unknown flag: $1 (expected --ld2410c and/or --debug)" >&2; exit 1 ;;
+    esac
+done
+ARTIFACT="firmware${MODEL}${DEBUG}"
 BRANCH="${1:-$(git rev-parse --abbrev-ref HEAD)}"
 
 RUN_ID=$(gh run list --workflow build.yml --branch "$BRANCH" --status success \

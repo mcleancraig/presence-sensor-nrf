@@ -1,14 +1,15 @@
-# Bathroom / Outdoor Presence Sensor Enclosures (3 Variants)
+# Bathroom / Outdoor Presence Sensor Enclosures (4 Variants)
 
-Parametric 3D-printable enclosures for the **SuperMini nRF52840 + Hi-Link HLK-LD2410S 24 GHz mmWave Radar + 18650** presence sensor, built with [CadQuery](https://cadquery.readthedocs.io/).
+Parametric 3D-printable enclosures for the **SuperMini nRF52840 + Hi-Link HLK-LD2410S (`20 × 20 mm`) or HLK-LD2410C (`22 × 16 mm`) 24 GHz mmWave Radar + 18650** presence sensor, built with [CadQuery](https://cadquery.readthedocs.io/).
 
-All three enclosure variants share the same verified, wall-joined internal architecture (`82.0 × 48.0 × 24.0 mm` cavity, `0.000 mm³` boolean interference across all 53 solid pairs, `1.20 mm` blind RF radome with `5.10 mm` antenna air gap, zero free-standing thin pillars) and are ready to slice in **Bambu Studio** for the **Bambu Lab A1** (`0.4 mm` nozzle, `0.20 mm` layer height, **Arachne** wall generator, **zero supports**):
+All four enclosure variants share the same verified, wall-joined internal architecture (`82.0 × 48.0 × 24.0 mm` cavity, `0.000 mm³` boolean interference across all 72 solid pairs, `1.20 mm` blind RF radome with `5.10 mm` antenna air gap, zero free-standing thin pillars) and are ready to slice in **Bambu Studio** for the **Bambu Lab A1** (`0.4 mm` nozzle, `0.20 mm` layer height, **Arachne** wall generator, **zero supports**):
 
 | Variant | Printable STL Files | Purpose & Mounting Style |
 |---|---|---|
-| **Model 1: Sealed Gasketed Wall-Mount** | [`out/base.stl`](out/base.stl), [`out/lid.stl`](out/lid.stl) | Steam-proof bathroom/outdoor enclosure (`118.8 × 76.1 × 29.4 mm`) with an exterior `2 mm` EPDM O-ring gasket groove, 4× `M3` heat-set inserts, and `±X` wall-mount screw tabs. |
-| **Model 2: Angled 45° Corner / Ceiling Snap-Fit** | [`out/corner_base.stl`](out/corner_base.stl), [`out/corner_lid.stl`](out/corner_lid.stl), [`out/corner_bracket.stl`](out/corner_bracket.stl) | Compact flangeless snap-fit case (`86.8 × 56.4 × 29.4 mm`) that slides into a support-free **90° room-corner / ceiling bracket** holding the radar at a **45° downward pitch** into a `3 m³` bathroom. |
-| **Model 3: Freestanding Vanity / Shelf Pod (USB-C)** | [`out/vanity_base.stl`](out/vanity_base.stl), [`out/vanity_lid.stl`](out/vanity_lid.stl) | Sleek freestanding pod (`86.8 × 54.4 × 29.4 mm`) that stands upright on its flat `-Y` pedestal foot (heavy 18650 cell at the bottom for low CG, radar facing horizontally into the room) with a precision **`+X` USB-C pass-through port** for in-place 18650 recharging. |
+| **Model 1: Sealed Gasketed Wall-Mount (`HLK-LD2410S`)** | [`out/base.stl`](out/base.stl), [`out/lid.stl`](out/lid.stl) | Steam-proof bathroom/outdoor enclosure (`118.8 × 76.1 × 29.4 mm`) with an exterior `2 mm` EPDM O-ring gasket groove, 4× `M3` heat-set inserts, and `±X` wall-mount screw tabs. |
+| **Model 2: Angled 45° Corner / Ceiling Snap-Fit (`HLK-LD2410S`)** | [`out/corner_base.stl`](out/corner_base.stl), [`out/corner_lid.stl`](out/corner_lid.stl), [`out/corner_bracket.stl`](out/corner_bracket.stl) | Compact flangeless snap-fit case (`86.8 × 56.4 × 29.4 mm`) that slides into a support-free **90° room-corner / ceiling bracket** holding the radar at a **45° downward pitch** into a `3 m³` bathroom. |
+| **Model 3: Freestanding Vanity / Shelf Pod (`HLK-LD2410S`, USB-C)** | [`out/vanity_base.stl`](out/vanity_base.stl), [`out/vanity_lid.stl`](out/vanity_lid.stl) | Sleek freestanding pod (`86.8 × 54.4 × 29.4 mm`) that stands upright on its flat `-Y` pedestal foot (heavy 18650 cell at the bottom for low CG, radar facing horizontally into the room) with a precision **`+X` USB-C pass-through port** for in-place 18650 recharging. |
+| **Model 4: HLK-LD2410C Compact Battery-Free Case (`22 × 16 mm` + Panel USB-C Socket)** | [`out/ld2410c_base.stl`](out/ld2410c_base.stl), [`out/ld2410c_lid.stl`](out/ld2410c_lid.stl) | Compact battery-free inline enclosure (`86.8 × 28.8 × 27.4 mm` body — **45% narrower**, no `18650` cell) for the **`22.0 × 16.0 × 1.2 mm` HLK-LD2410C**, featuring a dedicated `+X` snap-in bay for the **AliExpress 2-Pin Panel-Mount USB-C Socket (`1005008559159734`, `16.5 × 10.4 mm` bezel, `12.0 × 5.35 × 14.0 mm` stem)**, SuperMini nRF52840 shifted away from the `+X` wall (`BOARD_C_X = +7.0 mm`), `24 × 18 × 1.2 mm` blind RF radome, `-Y` shelf foot, and `±X` wall-mount tabs. |
 
 ---
 
@@ -42,16 +43,23 @@ All three enclosure variants share the same verified, wall-joined internal archi
 - **Upright Low-CG Shelf Posture**: A flat `72.0 × 29.4 mm` pedestal foot along the `-Y` exterior wall (`Y = -28.0 mm`, flush across both `vanity_base` and `vanity_lid`) lets the pod stand upright on a bathroom vanity, shelf, or cistern with the heavy 18650 cell at the bottom (`Y_BAT = -12.3 mm`) and the HLK-LD2410S facing horizontally into the room.
 - **In-Place USB-C Recharging Port**: Aligns the SuperMini nRF52840 at `BOARD_X_VANITY = +24.0 mm` (`0.50 mm` from the `+X` cavity wall) behind a `9.6 × 3.8 mm` rounded USB-C pass-through slot and a `13.0 × 7.6 × 1.0 mm` exterior overmold counterbore (`Z_USBC = 9.7 mm`), braced at `-X` by dual wall-joined corner stops to absorb plug insertion force.
 
+### Model 4: HLK-LD2410C (`22 × 16 mm`) Compact Battery-Free Enclosure (`ld2410c_base.stl`, `ld2410c_lid.stl`)
+- **Compact Battery-Free Outer Envelope**: **`86.8 × 28.8 × 27.4 mm` body** (`118.8 × 30.4 × 27.4 mm` including `±X` wall-mount tabs and `-Y` shelf foot; `82.0 × 24.0 × 22.0 mm` single-lane interior cavity — **45% narrower** with the `18650` battery bay eliminated).
+- **Single-Lane Wall-Joined HLK-LD2410C & SuperMini Cradles**: Both the `22.0 × 16.0 × 1.2 mm` HLK-LD2410C tower (`RADAR_C_X = -26.5 mm`, `3.85 mm` solid `±Y` walls, `3.35 mm` `-X` stop wall, `10.0 mm` central `+X` channel for the 5-pin `1.27 mm` header) and the SuperMini nRF52840 cradle (`BOARD_C_X = +7.0 mm`, `2.85 mm` solid `±Y` walls, 4 corner snap-hooks) fuse directly into **both** the `-Y` and `+Y` outer walls (`Y = ±12.0 mm`).
+- **AliExpress 2-Pin Panel-Mount USB-C Socket Bay (`1005008559159734`)**: Moves the SuperMini `17.5 mm` away from the `+X` wall (`PCB X = -9.50 .. +23.50 mm`) to house the **`16.5 × 10.4 × 2.0 mm` bezel / `12.0 × 5.35 × 14.0 mm` stem** panel-mount USB-C socket (`USBC_SOCK_Z = 12.5 mm`). Includes a `12.4 × 5.8 mm` `+X` through-slot, an interior `1.60 mm` panel-web recess so the socket's `15.7 mm` snap wings click and lock open inside the `+X` wall, dual floor-joined under-stem support rails (`Z = 9.65 mm`), `±Y` guide cheeks, a lid top hold-down boss (`Z = 15.50 mm`), and a `5.9 mm` internal wire-splitting bay (`X = +23.5 .. +29.4 mm`) behind the socket stem.
+
 ---
 
 ## 3. Bill of Materials (BOM)
 
 | Qty | Item | Models Used |
 |---|---|---|
-| 1 | **SuperMini nRF52840** (`33 × 18 mm` Pro Micro BLE board) | All (1, 2, 3) |
-| 1 | **Hi-Link HLK-LD2410S** (`20.0 × 20.0 × 1.2 mm` 24 GHz mmWave sensor + `2.54 mm` 5-pin `J2` header + **5-pin female DuPont lead**) | All (1, 2, 3) |
-| 1 | **Flat-top unprotected 18650 Li-ion cell** (`Ø18.4 × 65.0 mm`) | All (1, 2, 3) |
-| 1 pair | **18650 bare nickel-plated battery contact plates** (**`10 × 10 × 0.5 mm`**, 1× conical spring `-`, 1× dimple `+`) | All (1, 2, 3) |
+| 1 | **SuperMini nRF52840** (`33 × 18 mm` Pro Micro BLE board) | All (1, 2, 3, 4) |
+| 1 | **Hi-Link HLK-LD2410S** (`20.0 × 20.0 × 1.2 mm` 24 GHz mmWave sensor + `2.54 mm` 5-pin `J2` header + **5-pin female DuPont lead**) | Models 1, 2, 3 |
+| 1 | **Hi-Link HLK-LD2410C** (`22.0 × 16.0 × 1.2 mm` 24 GHz mmWave sensor + `1.27 mm` 5-pin header) | Model 4 |
+| 1 | **2-Pin Panel-Mount USB-C 5A Female Socket with LED** ([AliExpress `1005008559159734`](https://www.aliexpress.com/item/1005008559159734.html), `16.5 × 10.4 mm` bezel, `12.0 × 5.35 × 14.0 mm` snap-in body) | Model 4 |
+| 1 | **Flat-top unprotected 18650 Li-ion cell** (`Ø18.4 × 65.0 mm`) | Models 1, 2, 3 |
+| 1 pair | **18650 bare nickel-plated battery contact plates** (**`10 × 10 × 0.5 mm`**, 1× conical spring `-`, 1× dimple `+`) | Models 1, 2, 3 |
 | 4 | **M3 × 5.7 × 4.6 mm brass heat-set inserts** + **4× M3 × 8 mm A2/A4 stainless screws** | Model 1 only |
 | ~270 mm | **2.0 mm Ø EPDM or silicone O-ring cord** (or printed 95A TPU gasket loop) | Model 1 only |
 
@@ -63,8 +71,8 @@ All three enclosure variants share the same verified, wall-joined internal archi
 - **Nozzle / Layer Height**: `0.4 mm` nozzle, **`0.20 mm` layer height** (renders the `1.20 mm` radome as 6 solid layers).
 - **Wall Generator**: **Arachne** (mandatory so the `0.60 mm` 18650 contact-plate retaining lips print cleanly).
 - **Supports**: **None (`Disable Support`)** — all exported `.stl` files are pre-oriented for support-free printing:
-  - `base.stl`, `corner_base.stl`, `vanity_base.stl`: upright on `Z = 0` underside.
-  - `lid.stl`, `corner_lid.stl`, `vanity_lid.stl`: flipped `180°` so the flat outer top surface lies directly on the build plate.
+  - `base.stl`, `corner_base.stl`, `vanity_base.stl`, `ld2410c_base.stl`: upright on `Z = 0` underside.
+  - `lid.stl`, `corner_lid.stl`, `vanity_lid.stl`, `ld2410c_lid.stl`: flipped `180°` so the flat outer top surface lies directly on the build plate.
   - `corner_bracket.stl`: rotated `90°` onto its flat `-X` end face so the `90°` V-wings and C-channel jaws extrude vertically with zero overhangs.
 
 ---
@@ -76,9 +84,9 @@ cd enclosure
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-# Build all 3 models, export all .step/.stl files, and run 53-pair boolean & radome verification:
+# Build all 4 models, export all .step/.stl files, and run 72-pair boolean & radome verification:
 .venv/bin/python verify.py
 
-# Render all 16 2D cross-section PNGs to out/sections/*.png:
+# Render all 19 2D cross-section PNGs to out/sections/*.png:
 .venv/bin/python sections.py
 ```

@@ -29,6 +29,8 @@ COLORS: dict[str, str] = {
     "corner_bracket": "#555b66",
     "vanity_base": "#8e949e",
     "vanity_lid": "#4a78c2",
+    "ld2410c_base": "#8e949e",
+    "ld2410c_lid": "#4a78c2",
     "cell": "#dd4433",
     "plate_neg": "#3355dd",
     "plate_pos": "#3355dd",
@@ -37,6 +39,7 @@ COLORS: dict[str, str] = {
     "radar": "#e67e22",
     "radar_parts": "#f39c12",
     "dupont_5p": "#d35400",
+    "usb_c_socket": "#16a085",
     "usb_c_plug": "#8e44ad",
 }
 
@@ -160,7 +163,24 @@ def main() -> None:
         f"Model 3 YZ section at X={ev.BOARD_X_VANITY:.1f} mm (Vanity Pod -Y Standing Foot, 18650 Low-CG Bay & SuperMini)"
     ))
 
-    print(f"16 sections written to {out_dir}")
+    # Model 4 (Compact Battery-Free HLK-LD2410C 22x16 mm Enclosure with Panel-Mount USB-C Socket) sections
+    lc_base, lc_lid, dm4 = ev.make_ld2410c_base(), ev.make_ld2410c_lid(), ev.make_ld2410c_dummies()
+    shapes4: dict[str, cq.Workplane] = {"ld2410c_base": lc_base, "ld2410c_lid": lc_lid, **dm4}
+    z_radar_c = e.FLOOR + ev.RADAR_C_RAIL_H + ev.RADAR_C_T / 2
+    plot(out_dir, shapes4, SectionSpec(
+        "ld2410c_z_radar", (0.0, 0.0, z_radar_c), (0, 0, 1), (0, 1),
+        f"Model 4 XY section at Z={z_radar_c:.1f} mm (Compact 28.8 mm wide Battery-Free 22x16 mm HLK-LD2410C Cradle)"
+    ))
+    plot(out_dir, shapes4, SectionSpec(
+        "ld2410c_usbc_y", (0.0, ev.Y_C, 0.0), (0, 1, 0), (0, 2),
+        f"Model 4 XZ section at Y={ev.Y_C:.1f} mm (22x16 mm HLK-LD2410C + Shifted SuperMini + Panel-Mount USB-C Socket)"
+    ))
+    plot(out_dir, shapes4, SectionSpec(
+        "ld2410c_radar_x", (ev.RADAR_C_X, 0.0, 0.0), (1, 0, 0), (1, 2),
+        f"Model 4 YZ section at X={ev.RADAR_C_X:.1f} mm (Compact Battery-Free 22x16 mm HLK-LD2410C Cradle & 1.2 mm Radome)"
+    ))
+
+    print(f"19 sections written to {out_dir}")
 
 
 if __name__ == "__main__":

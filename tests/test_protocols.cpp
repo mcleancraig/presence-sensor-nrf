@@ -118,6 +118,41 @@ static void TestLd2410sCommandBuilders()
         Ld2410sProto::kOutputModeMinimal, buf, sizeof(buf));
     EXPECT_EQ(modeLen, sizeof(expectedMode), "SwitchOutputMode length");
     EXPECT_EQ(memcmp(buf, expectedMode, sizeof(expectedMode)), 0, "SwitchOutputMode wire bytes");
+
+    // 6. HLK-LD2410C Write Max Gate & Hold (0x0060) -> 30 bytes (Gate 3 = 2.25 m, Hold = 30 s)
+    const Ld2410cConfigParams cParams = {
+        .maxMovingGate     = 3u,
+        .maxStationaryGate = 3u,
+        .unoccupiedHoldSec = 30u,
+    };
+    const uint8_t expectedLd2410cWrite[30] = {
+        0xFD, 0xFC, 0xFB, 0xFA,
+        0x14, 0x00,                         // 20 bytes payload
+        0x60, 0x00,                         // Command 0x0060
+        0x00, 0x00, 0x03, 0x00, 0x00, 0x00, // Word 0x0000 (max moving gate) = 3
+        0x01, 0x00, 0x03, 0x00, 0x00, 0x00, // Word 0x0001 (max stationary gate) = 3
+        0x02, 0x00, 0x1E, 0x00, 0x00, 0x00, // Word 0x0002 (unoccupied hold sec) = 30
+        0x04, 0x03, 0x02, 0x01
+    };
+    EXPECT_EQ(Ld2410sProto::BuildLd2410cWriteMaxGateAndHoldCmd(cParams, buf, 29u), 0u,
+              "BuildLd2410cWriteMaxGateAndHoldCmd rejects short buffer");
+    EXPECT_EQ(Ld2410sProto::BuildLd2410cWriteMaxGateAndHoldCmd(cParams, buf, sizeof(buf)),
+              sizeof(expectedLd2410cWrite), "BuildLd2410cWriteMaxGateAndHoldCmd length == 30");
+    EXPECT_EQ(memcmp(buf, expectedLd2410cWrite, sizeof(expectedLd2410cWrite)), 0,
+              "BuildLd2410cWriteMaxGateAndHoldCmd byte-exact match");
+
+    // Verify HLK-LD2410C gate clamping (2..8) and hold clamping (0..65535)
+    const Ld2410cConfigParams cUnclamped = {
+        .maxMovingGate     = 1u,     // Clamped to 2
+        .maxStationaryGate = 16u,    // Clamped to 8
+        .unoccupiedHoldSec = 99999u, // Clamped to 65535 (0xFFFF)
+    };
+    EXPECT_EQ(Ld2410sProto::BuildLd2410cWriteMaxGateAndHoldCmd(cUnclamped, buf, sizeof(buf)),
+              30u, "BuildLd2410cWriteMaxGateAndHoldCmd clamped length == 30");
+    EXPECT_EQ(buf[10], 2u, "HLK-LD2410C maxMovingGate clamped to 2");
+    EXPECT_EQ(buf[16], 8u, "HLK-LD2410C maxStationaryGate clamped to 8");
+    EXPECT_EQ(buf[22], 0xFFu, "HLK-LD2410C unoccupiedHoldSec clamped low byte == 0xFF");
+    EXPECT_EQ(buf[23], 0xFFu, "HLK-LD2410C unoccupiedHoldSec clamped high byte == 0xFF");
 }
 
 static void TestLd2410sParserMinimalAndEdgeCases()
@@ -426,6 +461,78 @@ static void TestLd2410sMotionTrackerKinematics()
     EXPECT_TRUE(r7.occupied, "Post-OT2 Minimal 0x02 sample occupied=true");
     EXPECT_TRUE(r7.motion, "Post-OT2 Minimal 0x02 sample preserves 5s entry motion=true");
     EXPECT_EQ(tracker.GetAnchorDistanceMm(), 1400u, "Post-OT2 sample anchors at 1400 mm");
+
+    // 8. HLK-LD2410C static clutter occupancy decay after 30.0 s (kDefaultOccupancyHoldWindowMs) without movement:
+    // At t = 35000 ms (elapsed = 15000 ms < 30000 ms), even if a Stationary (0x02, isMinimalFrame=false) frame
+    // hops between static gates (1400 mm -> 840 mm, delta = 560 mm), it must NOT re-trigger motion or reset the timer!
+    Ld2410sReport r8GateHop = {
+        .state          = Ld2410sTargetState::Stationary,
+        .occupied       = true,
+        .motion         = false,
+        .distanceCm     = 84u,
+        .distanceMm     = 840u,
+        .isMinimalFrame = false,
+    };
+    tracker.Update(&r8GateHop, 35000);
+    EXPECT_TRUE(r8GateHop.occupied, "Stationary 0x02 gate hop at 15s keeps occupied=true");
+    EXPECT_TRUE(!r8GateHop.motion, "Stationary 0x02 gate hop (1400->840 mm) on LD2410C does NOT re-trigger motion");
+    EXPECT_EQ(tracker.GetLastMotionTimestampMs(), 20000, "Stationary 0x02 gate hop does NOT reset motion timestamp");
+
+    // At t = 49999 ms (elapsed = 29999 ms < 30000 ms), occupancy remains true while motion is false.
+    Ld2410sReport r8Hold = {
+        .state          = Ld2410sTargetState::Stationary,
+        .occupied       = true,
+        .motion         = false,
+        .distanceCm     = 140u,
+        .distanceMm     = 1400u,
+        .isMinimalFrame = false,
+    };
+    tracker.Update(&r8Hold, 49999);
+    EXPECT_TRUE(r8Hold.occupied, "Before 30s occupancy hold expires (29999 ms), occupied stays true");
+    EXPECT_TRUE(!r8Hold.motion, "Before 30s occupancy hold expires (29999 ms), motion is false");
+
+    // At t = 50000 ms (elapsed = 30000 ms >= 30000 ms), occupancy expires to Unoccupied (occupied = false, dist = 0).
+    Ld2410sReport r8Expire = {
+        .state          = Ld2410sTargetState::Stationary,
+        .occupied       = true,
+        .motion         = false,
+        .distanceCm     = 140u,
+        .distanceMm     = 1400u,
+        .isMinimalFrame = false,
+    };
+    tracker.Update(&r8Expire, 50000);
+    EXPECT_TRUE(!r8Expire.occupied, "At 30s without movement, latched 0x02 occupancy expires to false");
+    EXPECT_TRUE(!r8Expire.motion, "At 30s without movement, motion is false");
+    EXPECT_EQ(static_cast<uint8_t>(r8Expire.state), static_cast<uint8_t>(Ld2410sTargetState::Unoccupied),
+              "At 30s without movement, state clamps to Unoccupied");
+    EXPECT_EQ(r8Expire.distanceMm, 0u, "At 30s without movement, distanceMm clamps to 0");
+
+    // Subsequent HLK-LD2410C Stationary (0x02, isMinimalFrame=false) clutter shift (1400 -> 1270 mm) must NOT re-trigger occupancy:
+    Ld2410sReport r8StaticShift = {
+        .state          = Ld2410sTargetState::Stationary,
+        .occupied       = true,
+        .motion         = false,
+        .distanceCm     = 127u,
+        .distanceMm     = 1270u,
+        .isMinimalFrame = false,
+    };
+    tracker.Update(&r8StaticShift, 55000);
+    EXPECT_TRUE(!r8StaticShift.occupied, "Latched LD2410C Stationary (0x02) frame does not re-trigger occupancy");
+    EXPECT_EQ(r8StaticShift.distanceMm, 0u, "Latched LD2410C Stationary (0x02) frame keeps distanceMm=0");
+
+    // Genuine HLK-LD2410C Moving (0x01/0x03, isMinimalFrame=false) frame with >= 100 mm radial shift immediately re-triggers occupancy:
+    Ld2410sReport r8Reenter = {
+        .state          = Ld2410sTargetState::Moving,
+        .occupied       = true,
+        .motion         = true,
+        .distanceCm     = 85u,
+        .distanceMm     = 850u,
+        .isMinimalFrame = false,
+    };
+    tracker.Update(&r8Reenter, 56000);
+    EXPECT_TRUE(r8Reenter.occupied, "Genuine LD2410C Moving frame >= 100 mm re-triggers occupied=true");
+    EXPECT_TRUE(r8Reenter.motion, "Genuine LD2410C Moving frame >= 100 mm re-triggers motion=true");
+    EXPECT_EQ(r8Reenter.distanceMm, 850u, "Genuine LD2410C Moving frame reports 850 mm");
 }
 
 static void TestHaMqttDiscoveryAndNat64()
@@ -531,11 +638,144 @@ static void TestHaMqttDiscoveryAndNat64()
     EXPECT_EQ(synthIpv6[15], 250u, "NAT64 byte 15 == 250");
 }
 
+static size_t FeedStream(Ld2410sFrameParser &parser,
+                         const uint8_t *bytes,
+                         size_t len,
+                         Ld2410sParsedFrame *outLastFrame)
+{
+    size_t count = 0;
+    for (size_t i = 0; i < len; ++i) {
+        Ld2410sParsedFrame tmp{};
+        if (parser.PushByte(bytes[i], &tmp)) {
+            *outLastFrame = tmp;
+            ++count;
+        }
+    }
+    return count;
+}
+
+static void TestLd2410cParserStandardAndEngineeringFrames()
+{
+    Ld2410sFrameParser parser;
+    Ld2410sParsedFrame out{};
+
+    // 1. HLK-LD2410C Normal Report Frame (23 bytes, payloadLen = 13):
+    //    State 0x01 = Moving target (must NOT be misparsed as Unoccupied or Layout B!)
+    //    movingDistCm = 145 cm, movingEnergy = 80, stationaryDistCm = 0, stationaryEnergy = 0, detectionDistCm = 145 cm
+    const uint8_t ld2410cMovingFrame[23] = {
+        0xF4, 0xF3, 0xF2, 0xF1,
+        0x0D, 0x00,             // payloadLen = 13
+        0x02, 0xAA,             // normal mode (0x02) + head (0xAA)
+        0x01,                   // targetState = 0x01 (Moving target on LD2410C!)
+        0x91, 0x00,             // movingDistCm = 145 cm
+        0x50,                   // movingEnergy = 80
+        0x00, 0x00,             // stationaryDistCm = 0 cm
+        0x00,                   // stationaryEnergy = 0
+        0x91, 0x00,             // detectionDistCm = 145 cm
+        0x55, 0x00,             // tail (0x55) + check (0x00)
+        0xF8, 0xF7, 0xF6, 0xF5
+    };
+    EXPECT_EQ(FeedStream(parser, ld2410cMovingFrame, sizeof(ld2410cMovingFrame), &out), 1u,
+              "Parse HLK-LD2410C normal Moving (0x01) frame");
+    EXPECT_EQ(static_cast<uint8_t>(out.type), static_cast<uint8_t>(Ld2410sFrameType::Report),
+              "LD2410C frame type == Report");
+    EXPECT_EQ(static_cast<uint8_t>(out.report.state), static_cast<uint8_t>(Ld2410sTargetState::Moving),
+              "LD2410C state 0x01 mapped to Moving");
+    EXPECT_TRUE(out.report.occupied, "LD2410C state 0x01 occupied == true");
+    EXPECT_TRUE(out.report.motion, "LD2410C state 0x01 motion == true");
+    EXPECT_EQ(out.report.distanceCm, 145u, "LD2410C distanceCm == 145");
+    EXPECT_EQ(out.report.distanceMm, 1450u, "LD2410C distanceMm == 1450");
+    EXPECT_TRUE(!out.report.isMinimalFrame, "LD2410C isMinimalFrame == false");
+
+    // 2. HLK-LD2410C Normal Report Frame: State 0x02 = Stationary target (fallback to stationaryDistCm when detectionDistCm == 0)
+    const uint8_t ld2410cStationaryFrame[23] = {
+        0xF4, 0xF3, 0xF2, 0xF1,
+        0x0D, 0x00,
+        0x02, 0xAA,
+        0x02,                   // targetState = 0x02 (Stationary)
+        0x00, 0x00, 0x00,       // moving = 0 cm
+        0x78, 0x00, 0x45,       // stationary = 120 cm, energy = 69
+        0x00, 0x00,             // detectionDistCm = 0 (tests fallback to stationaryDistCm = 120 cm)
+        0x55, 0x00,
+        0xF8, 0xF7, 0xF6, 0xF5
+    };
+    EXPECT_EQ(FeedStream(parser, ld2410cStationaryFrame, sizeof(ld2410cStationaryFrame), &out), 1u,
+              "Parse HLK-LD2410C Stationary (0x02) frame");
+    EXPECT_EQ(static_cast<uint8_t>(out.report.state), static_cast<uint8_t>(Ld2410sTargetState::Stationary),
+              "LD2410C state 0x02 mapped to Stationary");
+    EXPECT_TRUE(out.report.occupied, "LD2410C state 0x02 occupied == true");
+    EXPECT_TRUE(!out.report.motion, "LD2410C state 0x02 motion == false");
+    EXPECT_EQ(out.report.distanceMm, 1200u, "LD2410C fallback stationary distanceMm == 1200");
+
+    // 3. HLK-LD2410C Engineering Mode Frame (type=0x01, payloadLen=35, total=45 bytes) + State 0x03 (Moving+Stationary) + State 0x00 (NoTarget) + 0x0160 ACK
+    uint8_t engStream[82] = {};
+    // Bytes 0..44: 45-byte Engineering Frame (state 0x03, detectionDistCm = 180 cm)
+    const uint8_t engPrefix[17] = {
+        0xF4, 0xF3, 0xF2, 0xF1,
+        0x23, 0x00,             // payloadLen = 35
+        0x01, 0xAA,             // engineering mode (0x01) + head (0xAA)
+        0x03,                   // state = 0x03 (Moving + Stationary)
+        0xB4, 0x00, 0x60,       // moving = 180 cm
+        0xA0, 0x00, 0x55,       // stationary = 160 cm
+        0xB4, 0x00              // detectionDistCm = 180 cm
+    };
+    memcpy(&engStream[0], engPrefix, sizeof(engPrefix));
+    // Bytes 17..38: 22 bytes of engineering gate max + gate energy data
+    for (size_t i = 17; i < 39; ++i) {
+        engStream[i] = static_cast<uint8_t>(i);
+    }
+    engStream[39] = 0x55;
+    engStream[40] = 0x00;
+    memcpy(&engStream[41], Ld2410sProto::kStdReportFooter, 4);
+
+    // Bytes 45..67: 23-byte Normal Frame with state 0x00 (NoTarget)
+    const uint8_t ld2410cNoTarget[23] = {
+        0xF4, 0xF3, 0xF2, 0xF1,
+        0x0D, 0x00,
+        0x02, 0xAA,
+        0x00,                   // state = 0x00 (NoTarget)
+        0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00,
+        0x00, 0x00,
+        0x55, 0x00,
+        0xF8, 0xF7, 0xF6, 0xF5
+    };
+    memcpy(&engStream[45], ld2410cNoTarget, sizeof(ld2410cNoTarget));
+
+    // Bytes 68..81: 14-byte Command 0x0060 ACK frame (0x0160, status 0x0000)
+    const uint8_t ld2410cAck[14] = {
+        0xFD, 0xFC, 0xFB, 0xFA,
+        0x04, 0x00,
+        0x60, 0x01,             // 0x0060 | 0x0100 = 0x0160
+        0x00, 0x00,             // status = 0x0000
+        0x04, 0x03, 0x02, 0x01
+    };
+    memcpy(&engStream[68], ld2410cAck, sizeof(ld2410cAck));
+
+    Ld2410sParsedFrame decoded[3] = {};
+    size_t decodedIdx = 0;
+    for (size_t i = 0; i < sizeof(engStream); ++i) {
+        Ld2410sParsedFrame tmp{};
+        if (parser.PushByte(engStream[i], &tmp) && decodedIdx < 3) {
+            decoded[decodedIdx++] = tmp;
+        }
+    }
+    EXPECT_EQ(decodedIdx, 3u, "Decoded 3 frames from HLK-LD2410C engineering + normal + ACK stream");
+    EXPECT_TRUE(decoded[0].report.occupied && decoded[0].report.motion, "Engineering 0x03 occupied & moving");
+    EXPECT_EQ(decoded[0].report.distanceMm, 1800u, "Engineering 0x03 distanceMm == 1800");
+    EXPECT_TRUE(!decoded[1].report.occupied && !decoded[1].report.motion, "Normal 0x00 unoccupied");
+    EXPECT_EQ(decoded[1].report.distanceMm, 0u, "Normal 0x00 distanceMm == 0");
+    EXPECT_EQ(static_cast<uint8_t>(decoded[2].type), static_cast<uint8_t>(Ld2410sFrameType::Ack), "Third frame is ACK");
+    EXPECT_EQ(decoded[2].ack.ackCommandWord, 0x0160u, "ACK command word == 0x0160");
+    EXPECT_EQ(decoded[2].ack.status, 0x0000u, "ACK status == 0x0000");
+}
+
 int main()
 {
     TestLd2410sCommandBuilders();
     TestLd2410sParserMinimalAndEdgeCases();
     TestLd2410sParserStandardAndAckWithNoise();
+    TestLd2410cParserStandardAndEngineeringFrames();
     TestBthomeV2EncodingAndSpecCompliance();
     TestLd2410sMotionTrackerKinematics();
     TestHaMqttDiscoveryAndNat64();
@@ -545,6 +785,6 @@ int main()
         return EXIT_FAILURE;
     }
 
-    printf("PASSED: All %d protocol assertions succeeded (HLK-LD2410S + BTHome v2 + HA MQTT/NAT64)\n", sTestsRun);
+    printf("PASSED: All %d protocol assertions succeeded (HLK-LD2410S/C + BTHome v2 + HA MQTT/NAT64)\n", sTestsRun);
     return EXIT_SUCCESS;
 }

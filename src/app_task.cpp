@@ -104,8 +104,10 @@ void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
 
     const int64_t nowMs = k_uptime_get();
     static constexpr uint16_t kMaxBathroomDistanceMm =
-        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kGateWidthMm);
-    mMotionTracker.Update(&report, nowMs, kMaxBathroomDistanceMm);
+        static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE * Ld2410sProto::kActiveGateWidthMm);
+    static constexpr int64_t kOccupancyHoldWindowMs =
+        static_cast<int64_t>(CONFIG_APP_RADAR_HOLD_S) * 1000;
+    mMotionTracker.Update(&report, nowMs, kMaxBathroomDistanceMm, kOccupancyHoldWindowMs);
     mLastRadarReport = report;
 
     const bool stateChanged = (report.occupied != mLastOccupied) ||
@@ -120,6 +122,15 @@ void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
 
     if (stateChanged) {
         mLastStateChangeMs = nowMs;
+        mRadar.LogDiagnostics(report, forceBurst ? "ot2-edge" : "state-chg");
+    } else if (forceBurst) {
+        mRadar.LogDiagnostics(report, "ot2-edge");
+    } else {
+        static int64_t sLastDiagLogMs = 0;
+        if ((nowMs - sLastDiagLogMs) >= 2000) {
+            sLastDiagLogMs = nowMs;
+            mRadar.LogDiagnostics(report, "diag-2s");
+        }
     }
 
     // Re-assert recent occupancy/motion transitions every 3.2 s for 15 s so ESPHome

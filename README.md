@@ -1,8 +1,8 @@
 # presence-sensor-nrf
 
-Ultra-low-power 24 GHz mmWave Human Presence, Motion, Distance, and Battery Sensor for Home Assistant over **OpenThread 1.3 Sleepy End Device (SED) + NAT64 + Home Assistant MQTT Auto-Discovery** (and host-tested BTHome v2 codec), built on the SuperMini nRF52840 (`nice!nano v2` compatible) and the Hi-Link **HLK-LD2410S** battery-powered radar module.
+Ultra-low-power 24 GHz mmWave Human Presence, Motion, Distance, and Battery Sensor for Home Assistant over **OpenThread 1.3 Sleepy End Device (SED) + NAT64 + Home Assistant MQTT Auto-Discovery** (and host-tested BTHome v2 codec), built on the SuperMini nRF52840 (`nice!nano v2` compatible) and the Hi-Link **HLK-LD2410S** (`20 × 20 mm` battery-powered radar) or **HLK-LD2410C** (`22 × 16 mm` constant USB-C powered radar).
 
-> **Enclosure:** Three 3D-printable Bambu A1 enclosure models (STEP for Fusion + STL) in [`enclosure/`](enclosure/README.md) — see [Section 8](#8-3d-printable-enclosures-3-bambu-a1-models).
+> **Enclosures:** Four 3D-printable Bambu A1 enclosure models (STEP for Fusion + STL) in [`enclosure/`](enclosure/README.md) — including **Model 4 (`ld2410c_base.stl` / `ld2410c_lid.stl`)** tailored for the `22 × 16 mm` HLK-LD2410C with a constant USB-C power pass-through port — see [Section 8](#8-3d-printable-enclosures-4-bambu-a1-models).
 >
 > **Bring-up notes:** see [`doc/bringup-notes.md`](doc/bringup-notes.md) for flash offset requirements (`0x1000` without SoftDevice), HLK-LD2410S continuous power vs. UART sleep architecture, and debugging over USB CDC ACM.
 
@@ -11,7 +11,9 @@ Ultra-low-power 24 GHz mmWave Human Presence, Motion, Distance, and Battery Sens
 ## 1. Hardware Architecture
 
 - **Microcontroller**: SuperMini nRF52840 (pinout and Adafruit UF2 bootloader compatible with `nice!nano v2`).
-- **mmWave Radar**: Hi-Link **HLK-LD2410S** 24 GHz FMCW human presence & micro-motion radar (`3.0 V - 3.6 V` regulated rail, ~`58 - 100 µA` average current in low-speed 1 Hz sleep mode; **`20.0 × 20.0 × 1.2 mm` square PCB** with `R = 2.0 mm` rounded corners and a **`2.54 mm` (`0.100"`) pitch 5-pin `J2` header**).
+- **mmWave Radar (2 Supported Variants)**:
+  - **Hi-Link HLK-LD2410S (Default, `CONFIG_APP_RADAR_LD2410S=y`)**: 24 GHz FMCW battery-powered human presence & micro-motion radar (`3.0 V - 3.6 V` regulated rail, ~`58 - 100 µA` average current in low-speed 1 Hz sleep mode; **`20.0 × 20.0 × 1.2 mm` square PCB** with `R = 2.0 mm` rounded corners, `115200` baud UART, `0.70 m` gate spacing, and an asymmetric **`2.54 mm` (`0.100"`) pitch 5-pin `J2` header**).
+  - **Hi-Link HLK-LD2410C (`ld2410c.conf`, `CONFIG_APP_RADAR_LD2410C=y`)**: 24 GHz FMCW continuous-power human presence radar (`VCC` powered from `RAW`/`B+` at `~4.1 V` with the underside **`BI-PROG` (`BOOST`) jumper bridged** for `300 mA`, or from `~4.7–5.0 V` USB `VBUS` at diode `D1` / `LTH7R` Pin 4; **`22.0 × 16.0 × 1.2 mm` rectangular PCB** with `R = 1.2 mm` rounded corners, `256000` baud UART via `NRF_UARTE_BAUDRATE_250000` with automatic `115200` baud & TX/RX pin-swap fallback, `0.75 m` gate spacing, and a centered **`2.54 mm` (`0.100"`) pitch 5-pin header** `TX, RX, OUT, GND, VCC`).
 - **Power Source**: Single Li-ion cell (`3.0 V - 4.2 V`) feeding the SuperMini `B+`/`B-` pads (`VDDH`).
 - **Continuous Radar Power (`P0.13` Switched VCC)**: Unlike one-shot I2C sensors, the HLK-LD2410S executes an internal 1 Hz / 8 Hz FMCW chirp state machine and maintains adaptive environmental noise baselines. Its `3V3` input (`J2 Pin 1`) is powered from the SuperMini's switched `VCC` header pin (`P0.13` HIGH continuously during normal operation) so the onboard 3.3 V LDO regulates the raw cell voltage (`3.0 V - 4.2 V`) down to a clean `3.3 V` within the radar's `3.6 V` absolute maximum limit.
 - **Interrupt-Driven Wake & UARTE0 Runtime Suspend**:
@@ -38,6 +40,12 @@ The HLK-LD2410S `J2` 5-pin header (`3V3`, `GND`, `OT1`, `RX`, `OT2`) uses a stan
   - **Antenna Side (`TOP层` -> `+Z` UP)**: The front face containing the two diagonally opposite 24 GHz patch antennas and `ICL1112` transceiver IC faces **UP (`+Z`)** directly toward the lid's **`22 × 22 × 1.2 mm`** blind RF radome window.
   - **Component / Header Side (`Bottom层` -> `-Z` DOWN, `J2` -> `+X`)**: The underside containing the `PY32F030` MCU, `YXC` crystal, and `-Z` 5-pin `J2` header faces **DOWN (`-Z`)** with **`19.5 mm`** of under-board vertical clearance, and the `J2` 5-pin header edge faces **`+X` directly toward the SuperMini nRF52840** for short, unpinched cable routing.
   - **Optional Decoupling Capacitor (`10–47 µF`)**: Because `Pin 1 (3V3)` and `Pin 2 (GND)` on `J2` are immediately adjacent (`2.54 mm` pitch), an optional `10–47 µF` capacitor can be soldered directly across Pins 1 and 2 on the `-Z` underside to smooth 24 GHz chirp current spikes.
+- **HLK-LD2410C Pinout, Power Rail (`RAW`/`B+` `4.1 V` vs `VBUS` `5 V`) & Enclosure Orientation (`22.0 × 16.0 × 1.2 mm` PCB, `ld2410c.conf`)**:
+  - The HLK-LD2410C 5-pin `2.54 mm` header (`VCC`, `GND`, `OUT`, `RX`, `TX`) sits centered along the `16.0 mm` `+X` edge facing the SuperMini nRF52840 (`GND` -> `GND`, `TX` -> `P0.08` / `008`, `RX` -> `P0.06` / `006`, `OUT` -> `P0.17` / `017`).
+  - **Why `RAW` and `B+` Both Measure `4.1 V` on the SuperMini nRF52840**: On the SuperMini nRF52840 schematic, the top-right through-hole `RAW` pin and the front `B+` pad are **physically tied to the same copper net (`VBAT`)**, which is the `BAT` output (`Pin 3`) of the onboard **`LTH7R` (`TP4054`/`LP4057`) `4.2 V` Li-ion charger IC** — **not** raw USB `5 V` (`VBUS`). By default, `LTH7R` limits current on `RAW`/`B+` to **`100 mA`**, whereas the HLK-LD2410C draws `~70–80 mA` average with `120–200 mA` chirp peaks. Power `VCC` on the HLK-LD2410C using either:
+    1. **`RAW` or `B+` (`~4.1 V`) with the Underside `BI-PROG` Jumper Bridged (Easiest Through-Hole Wiring)**: On the underside of the `nice!nano` clone (next to the `VDD / DIO / CLK / GND` SWD pads), solder a bridge across the 2-pad **`BI-PROG`** (`Battery I-PROG`, labeled `BOOST` on genuine `nice!nano v2`) jumper to raise the `LTH7R` current limit from `100 mA` to **`300 mA`**. Because the HLK-LD2410C uses an onboard `3.3 V` LDO regulator (`SOT-23-5`) to step `VCC` down to `3.3 V` internally, `4.1 V` at `300 mA` provides `~0.8 V` of LDO headroom (add an optional `10–47 µF` capacitor across `VCC` and `GND`).
+    2. **Direct `~4.7–5.0 V` USB `VBUS` Tap at Diode `D1` / `LTH7R Pin 4`**: For a true `5 V` rail that bypasses the `LTH7R` charger IC completely, solder the HLK-LD2410C `VCC` wire to the USB `VBUS` Schottky diode **`D1`** (or **`LTH7R` Pin 4** / its adjacent input capacitor pad) directly behind the USB-C receptacle on the top of the SuperMini PCB.
+  - Mount in **Model 4 (`ld2410c_base.stl` + `ld2410c_lid.stl`)** with the 24 GHz patch antennas facing **UP (`+Z`)** under the `24 × 18 × 1.2 mm` blind RF radome pocket and the 5-pin header facing **DOWN (`-Z`)** on the `+X` edge toward the SuperMini.
 
 ---
 
@@ -116,14 +124,21 @@ Expects the SDK in `~/ncs` next to this repo in `~/git/presence-sensor-nrf`:
 ```bash
 source env.sh
 
-# Release build (UART console & logging disabled for battery life)
+# Release build for HLK-LD2410S (default, 20x20 mm battery-powered radar)
 west build --no-sysbuild -b nice_nano/nrf52840 -p always -o=-k0 \
   -s ~/git/presence-sensor-nrf \
   -d ~/git/presence-sensor-nrf/build -- \
   -DBOARD_ROOT=$HOME/git/presence-sensor-nrf
+
+# Release build for HLK-LD2410C (22x16 mm constant USB-C powered radar)
+west build --no-sysbuild -b nice_nano/nrf52840 -p always -o=-k0 \
+  -s ~/git/presence-sensor-nrf \
+  -d ~/git/presence-sensor-nrf/build_ld2410c -- \
+  -DBOARD_ROOT=$HOME/git/presence-sensor-nrf \
+  -DEXTRA_CONF_FILE="local.conf;ld2410c.conf"
 ```
 
-For benchtop bring-up with live logs over USB CDC ACM (`screen /dev/cu.usbmodem* 115200`), build with `debug.conf` and `debug.overlay`:
+For benchtop bring-up with live logs over USB CDC ACM (`screen /dev/cu.usbmodem* 115200`), build with `debug.conf` and `debug.overlay` (add `ld2410c.conf` for HLK-LD2410C):
 
 ```bash
 source env.sh
@@ -137,11 +152,13 @@ west build --no-sysbuild -b nice_nano/nrf52840 -p always -o=-k0 \
 
 ### GitHub Actions Build
 
-Every push runs `.github/workflows/build.yml` (host unit tests + Release UF2 + Debug UF2 in `ghcr.io/nrfconnect/sdk-nrf-toolchain:v2.8.0`). Download the latest CI artifacts into `build/zephyr/` with:
+Every push runs `.github/workflows/build.yml` (host unit tests + HLK-LD2410S & HLK-LD2410C Release/Debug UF2 builds in `ghcr.io/nrfconnect/sdk-nrf-toolchain:v2.8.0`). Download the latest CI artifacts into `build/zephyr/` with:
 
 ```bash
-scripts/fetch-firmware.sh           # release build
-scripts/fetch-firmware.sh --debug   # USB CDC ACM debug build
+scripts/fetch-firmware.sh                     # HLK-LD2410S release build
+scripts/fetch-firmware.sh --debug             # HLK-LD2410S USB CDC ACM debug build
+scripts/fetch-firmware.sh --ld2410c           # HLK-LD2410C release build
+scripts/fetch-firmware.sh --ld2410c --debug   # HLK-LD2410C USB CDC ACM debug build
 ```
 
 ---
@@ -188,12 +205,13 @@ With a **2800 mAh Li-ion cell** (~`2200 mAh` usable above `3.0 V`), a `75 – 26
 
 ---
 
-## 8. 3D-Printable Enclosures (3 Bambu A1 Models)
+## 8. 3D-Printable Enclosures (4 Bambu A1 Models)
 
-[`enclosure/enclosure.py`](enclosure/enclosure.py) generates **three complete, support-free Bambu A1 enclosure models** tailored to the **`20.0 × 20.0 × 1.2 mm` HLK-LD2410S** (`2.54 mm` 5-pin `J2` header facing `+X`), **SuperMini nRF52840**, and **18650 Li-ion cell** (see [`enclosure/README.md`](enclosure/README.md) for assembly and print settings):
+[`enclosure/enclosure.py`](enclosure/enclosure.py) and [`enclosure/enclosure_variants.py`](enclosure/enclosure_variants.py) generate **four complete, support-free Bambu A1 enclosure models** tailored to the **`20.0 × 20.0 × 1.2 mm` HLK-LD2410S** or **`22.0 × 16.0 × 1.2 mm` HLK-LD2410C**, **SuperMini nRF52840**, and **18650 Li-ion cell** (see [`enclosure/README.md`](enclosure/README.md) for assembly and print settings):
 
-| Model | Variant Name | Printable `.stl` Files (`enclosure/`) | CAD `.step` Files (`enclosure/`) | Closure & Mounting | Key Features & Best Use Case |
+| Model | Variant Name | Printable `.stl` Files (`enclosure/out/`) | CAD `.step` Files (`enclosure/out/`) | Closure & Mounting | Key Features & Best Use Case |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Model 1** | **Sealed Gasketed Wall-Mount** | `base.stl`, `lid.stl` | `base.step`, `lid.step`, `assembly.step` | 4× M3×8 screws + M3×5.7×4.6 heat-set inserts, 2 mm EPDM/TPU gasket groove, `±X` wall-mount tabs | Steam/splash-resistant bathroom wall mounting (`22 × 22 × 1.2 mm` blind RF radome window) |
-| **Model 2** | **Snap-Fit + 45° Room-Corner Bracket** | `corner_base.stl`, `corner_lid.stl`, `corner_bracket.stl` | `corner_base.step`, `corner_lid.step`, `corner_bracket.step`, `corner_assembly.step` | Tool-less snap-fit lid (`±Y` barbs) + slide-on 45° downward-tilt 90° room-corner / ceiling bracket | Optimal 3 m³ bathroom corner coverage with zero metal fasteners or heat-set inserts |
-| **Model 3** | **Freestanding Shelf / Vanity Pod** | `vanity_base.stl`, `vanity_lid.stl` | `vanity_base.step`, `vanity_lid.step`, `vanity_assembly.step` | Tool-less snap-fit lid (`±Y` barbs) + flat weighted `-Y` 18650 base foot | Stands upright on a bathroom shelf or vanity with a `+X` **USB-C pass-through port** for in-place 18650 recharging |
+| **Model 1** | **Sealed Gasketed Wall-Mount (HLK-LD2410S)** | `base.stl`, `lid.stl` | `base.step`, `lid.step`, `assembly.step` | 4× M3×8 screws + M3×5.7×4.6 heat-set inserts, 2 mm EPDM/TPU gasket groove, `±X` wall-mount tabs | Steam/splash-resistant bathroom wall mounting (`22 × 22 × 1.2 mm` blind RF radome window) |
+| **Model 2** | **Snap-Fit + 45° Room-Corner Bracket (HLK-LD2410S)** | `corner_base.stl`, `corner_lid.stl`, `corner_bracket.stl` | `corner_base.step`, `corner_lid.step`, `corner_bracket.step`, `corner_assembly.step` | Tool-less snap-fit lid (`±Y` barbs) + slide-on 45° downward-tilt 90° room-corner / ceiling bracket | Optimal 3 m³ bathroom corner coverage with zero metal fasteners or heat-set inserts |
+| **Model 3** | **Freestanding Shelf / Vanity Pod (HLK-LD2410S)** | `vanity_base.stl`, `vanity_lid.stl` | `vanity_base.step`, `vanity_lid.step`, `vanity_assembly.step` | Tool-less snap-fit lid (`±Y` barbs) + flat weighted `-Y` 18650 base foot | Stands upright on a bathroom shelf or vanity with a `+X` **USB-C pass-through port** for in-place 18650 recharging |
+| **Model 4** | **HLK-LD2410C Constant USB-C Power Case (`22 × 16 mm`)** | `ld2410c_base.stl`, `ld2410c_lid.stl` | `ld2410c_base.step`, `ld2410c_lid.step`, `ld2410c_assembly.step`, `ld2410c_fit_check.step` | Tool-less snap-fit lid (`±Y` barbs) + flat `-Y` shelf foot + `±X` wall-mount screw tabs | Dedicated `22.0 × 16.0 mm` HLK-LD2410C cradle + `24 × 18 × 1.2 mm` blind RF radome + **`+X` constant USB-C power pass-through port** (shelf or wall mount) |

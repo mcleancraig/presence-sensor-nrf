@@ -199,7 +199,7 @@ size_t FormatDiscoveryPayload(const char *nodeSlug,
             "\"val_tpl\":\"%s\","
             "\"pl_on\":\"ON\","
             "\"pl_off\":\"OFF\","
-            "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mdl\":\"HLK-LD2410S Thread SED\",\"mf\":\"OpenThread nRF52840\",\"sw\":\"%s\"}}",
+            "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mdl\":\"%s\",\"mf\":\"OpenThread nRF52840\",\"sw\":\"%s\"}}",
             meta.displayName,
             nodeSlug, meta.objectId,
             nodeSlug,
@@ -208,6 +208,7 @@ size_t FormatDiscoveryPayload(const char *nodeSlug,
             meta.valueTemplate,
             nodeSlug,
             deviceName,
+            kActiveRadarModelName,
             swVersion);
     } else {
         n = snprintf(
@@ -221,7 +222,7 @@ size_t FormatDiscoveryPayload(const char *nodeSlug,
             "\"unit_of_meas\":\"%s\","
             "\"stat_cla\":\"%s\","
             "\"val_tpl\":\"%s\","
-            "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mdl\":\"HLK-LD2410S Thread SED\",\"mf\":\"OpenThread nRF52840\",\"sw\":\"%s\"}}",
+            "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mdl\":\"%s\",\"mf\":\"OpenThread nRF52840\",\"sw\":\"%s\"}}",
             meta.displayName,
             nodeSlug, meta.objectId,
             nodeSlug,
@@ -232,6 +233,7 @@ size_t FormatDiscoveryPayload(const char *nodeSlug,
             meta.valueTemplate,
             nodeSlug,
             deviceName,
+            kActiveRadarModelName,
             swVersion);
     }
 

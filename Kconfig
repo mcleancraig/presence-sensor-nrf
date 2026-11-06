@@ -1,9 +1,31 @@
 #
 # Copyright (c) 2026 Craig McLean
-# OpenThread SED + Home Assistant MQTT mmWave Presence Sensor (HLK-LD2410S) Kconfig
+# OpenThread SED + Home Assistant MQTT mmWave Presence Sensor (HLK-LD2410S / HLK-LD2410C) Kconfig
 #
 
 mainmenu "OpenThread SED + Home Assistant MQTT mmWave Presence Sensor"
+
+choice APP_RADAR_MODEL
+	prompt "Hi-Link 24 GHz mmWave radar module model"
+	default APP_RADAR_LD2410S
+
+config APP_RADAR_LD2410S
+	bool "HLK-LD2410S (3.3 V ultra-low-power, 115200 baud, 20x20 mm)"
+	help
+	  Hi-Link HLK-LD2410S 24 GHz ultra-low-power radar module powered from
+	  3.3 V (P0.13 high-drive GPIO or 3V3), communicating at 115200 8N1 using
+	  command 0x0070/0x007A and 5-byte minimal (6E..62) or standard frames,
+	  with 0.70 m per range gate.
+
+config APP_RADAR_LD2410C
+	bool "HLK-LD2410C (5 V USB-C powered, 256000 baud, 16x22 mm)"
+	help
+	  Hi-Link HLK-LD2410C 24 GHz presence radar module powered from 5 V VBUS
+	  (constant USB-C connection), communicating at 256000 8N1 (with automatic
+	  115200 baud fallback) using command 0x0060 and standard/engineering
+	  frames (F4 F3 F2 F1 .. AA .. 55 00 F8 F7 F6 F5), with 0.75 m per gate.
+
+endchoice
 
 config APP_HEARTBEAT_INTERVAL_SEC
 	int "Periodic idle MQTT state refresh interval (seconds)"

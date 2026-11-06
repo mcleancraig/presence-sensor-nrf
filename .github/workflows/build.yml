@@ -21,6 +21,12 @@ jobs:
           - variant: debug
             artifact: firmware-debug
             extra: -DEXTRA_CONF_FILE=debug.conf -DEXTRA_DTC_OVERLAY_FILE=debug.overlay
+          - variant: ld2410c
+            artifact: firmware-ld2410c
+            extra: -DEXTRA_CONF_FILE=ld2410c.conf
+          - variant: ld2410c-debug
+            artifact: firmware-ld2410c-debug
+            extra: -DEXTRA_CONF_FILE="ld2410c.conf;debug.conf" -DEXTRA_DTC_OVERLAY_FILE=debug.overlay
     container:
       image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v2.8.0
     defaults:
