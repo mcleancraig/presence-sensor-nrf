@@ -126,9 +126,9 @@ RIM_CLEAR = 0.20            # radial slip-fit clearance per side inside base deb
 RIM_Z_CLEAR = 0.25          # vertical bottom clearance inside 1.50 mm deep base groove (1.25 mm tongue height)
 RIM_W = GROOVE_W - 2 * RIM_CLEAR
 RIM_H = GROOVE_D - RIM_Z_CLEAR
-LIP_CLEAR = 0.3             # snap-fit lip clearance preserved for flangeless Model 2/3 variants
+LIP_CLEAR = 0.15            # tight 0.15 mm/side perimeter registration for snap-fit lids
 LIP_T = 1.6
-LIP_H = 2.0
+LIP_H = 2.6                 # 2.6 mm deep perimeter lip for secure snap-fit retention
 RADOME_L = 22.0             # blind interior pocket length over 20x20 mm HLK-LD2410S
 RADOME_W = 22.0             # blind interior pocket width
 RADOME_T = 1.2              # solid top wall thickness (<0.2 dB loss at 24 GHz, lambda ~ 12.5 mm)
@@ -312,22 +312,11 @@ def _add_battery_bay(base: cq.Workplane) -> cq.Workplane:
 
 
 def _add_lid_holddowns(lid: cq.Workplane, board_x: float = BOARD_X) -> cq.Workplane:
-    """Add lid underside hold-down arches over SuperMini corners and bosses over HLK-LD2410S corners."""
-    z_brd_top = FLOOR + BOARD_RAIL_H + BOARD_T
+    """Add lid underside corner bosses over HLK-LD2410S corners (no SuperMini arches so wiring is unobstructed)."""
+    del board_x
     z_rad_top = FLOOR + RADAR_RAIL_H + RADAR_T
-    # 1. Two portal-arch hold-down ribs over SuperMini corners outside the 28 mm GPIO pin rows
-    #    (4 corner feet stop 0.35 mm above PCB at Z = 8.45 mm; central bridge clears 3.2 mm USB-C)
-    foot_z0 = z_brd_top + 0.35                           # Z = 8.45 mm
-    bridge_z0 = z_brd_top + 3.90                         # Z = 12.00 mm (clears 3.2 mm USB-C & SMD parts)
-    for sx in (-1, 1):
-        arch_x = board_x + sx * 15.15                    # outside 28 mm pin rows, over corner pads
-        lid = lid.union(box(2.1, 16.1, H - bridge_z0 + 0.2, arch_x, Y_BRD, bridge_z0))
-        for sy in (-1, 1):
-            foot_y = Y_BRD + sy * 7.15                   # clears 9.2 mm USB-C & 0.65 mm corner snap-hooks
-            lid = lid.union(box(2.1, 1.8, bridge_z0 - foot_z0 + 0.2, arch_x, foot_y, foot_z0))
-
-    # 2. Three 2.4x2.4 mm corner hold-down bosses over HLK-LD2410S (-X,-Y), (-X,+Y), and (+X,-Y) corners
-    #    (stops 0.30 mm above radar PCB top face at Z = 23.40 mm; leaves 14.8 mm clear antenna span & J2)
+    # Three 2.4x2.4 mm corner hold-down bosses over HLK-LD2410S (-X,-Y), (-X,+Y), and (+X,-Y) corners
+    # (stops 0.30 mm above radar PCB top face at Z = 23.40 mm; leaves 14.8 mm clear antenna span & J2)
     rad_hold_z0 = z_rad_top + 0.30                       # Z = 23.40 mm
     rad_hold_h = (H + RADOME_DEPTH) - rad_hold_z0 + 0.2
     for cx, cy in [(-28.1, +1.80), (-28.1, +19.00), (-10.9, +1.80)]:

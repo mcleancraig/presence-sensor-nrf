@@ -31,6 +31,23 @@ COLORS: dict[str, str] = {
     "vanity_lid": "#4a78c2",
     "ld2410c_base": "#8e949e",
     "ld2410c_lid": "#4a78c2",
+    "ld2410s_usb_base": "#8e949e",
+    "ld2410s_usb_lid": "#4a78c2",
+    "v_stand": "#555b66",
+    "aura_s_base": "#7f8790",
+    "aura_s_lid": "#3b6db3",
+    "aura_s_stand": "#484e58",
+    "aura_c_base": "#7f8790",
+    "aura_c_lid": "#3b6db3",
+    "aura_c_stand": "#484e58",
+    "aura_s_v2_base": "#7f8790",
+    "aura_s_v2_lid": "#3b6db3",
+    "aura_s_v2_stand": "#484e58",
+    "aura_c_v2_base": "#7f8790",
+    "aura_c_v2_lid": "#3b6db3",
+    "aura_c_v2_stand": "#484e58",
+    "usbc_socket_fit_test": "#7f8c8d",
+    "fit_test_labels": "#2c3e50",
     "cell": "#dd4433",
     "plate_neg": "#3355dd",
     "plate_pos": "#3355dd",
@@ -39,6 +56,7 @@ COLORS: dict[str, str] = {
     "radar": "#e67e22",
     "radar_parts": "#f39c12",
     "dupont_5p": "#d35400",
+    "direct_wires": "#d35400",
     "usb_c_socket": "#16a085",
     "usb_c_plug": "#8e44ad",
 }
@@ -163,24 +181,136 @@ def main() -> None:
         f"Model 3 YZ section at X={ev.BOARD_X_VANITY:.1f} mm (Vanity Pod -Y Standing Foot, 18650 Low-CG Bay & SuperMini)"
     ))
 
-    # Model 4 (Compact Battery-Free HLK-LD2410C 22x16 mm Enclosure with Panel-Mount USB-C Socket) sections
+    # Model 4 (Sleek Desktop Battery-Free HLK-LD2410C 22x16 mm Enclosure + Detachable V-Stand) sections
     lc_base, lc_lid, dm4 = ev.make_ld2410c_base(), ev.make_ld2410c_lid(), ev.make_ld2410c_dummies()
-    shapes4: dict[str, cq.Workplane] = {"ld2410c_base": lc_base, "ld2410c_lid": lc_lid, **dm4}
+    v_stand_c = ev.make_v_stand(outer_w=ev.OUTER_W_C)
+    shapes4: dict[str, cq.Workplane] = {"ld2410c_base": lc_base, "ld2410c_lid": lc_lid, "v_stand": v_stand_c, **dm4}
     z_radar_c = e.FLOOR + ev.RADAR_C_RAIL_H + ev.RADAR_C_T / 2
     plot(out_dir, shapes4, SectionSpec(
         "ld2410c_z_radar", (0.0, 0.0, z_radar_c), (0, 0, 1), (0, 1),
-        f"Model 4 XY section at Z={z_radar_c:.1f} mm (Compact 28.8 mm wide Battery-Free 22x16 mm HLK-LD2410C Cradle)"
+        f"Model 4 XY section at Z={z_radar_c:.1f} mm (Sleek 28.8 mm wide HLK-LD2410C Pod + Detachable Inverted-V Stand)"
     ))
     plot(out_dir, shapes4, SectionSpec(
         "ld2410c_usbc_y", (0.0, ev.Y_C, 0.0), (0, 1, 0), (0, 2),
-        f"Model 4 XZ section at Y={ev.Y_C:.1f} mm (22x16 mm HLK-LD2410C + Shifted SuperMini + Panel-Mount USB-C Socket)"
+        f"Model 4 XZ section at Y={ev.Y_C:.1f} mm (22x16 mm HLK-LD2410C + SuperMini + Panel-Mount USB-C Socket, No Screw Tabs)"
     ))
     plot(out_dir, shapes4, SectionSpec(
         "ld2410c_radar_x", (ev.RADAR_C_X, 0.0, 0.0), (1, 0, 0), (1, 2),
-        f"Model 4 YZ section at X={ev.RADAR_C_X:.1f} mm (Compact Battery-Free 22x16 mm HLK-LD2410C Cradle & 1.2 mm Radome)"
+        f"Model 4 YZ section at X={ev.RADAR_C_X:.1f} mm (Sleek Battery-Free 22x16 mm HLK-LD2410C Cradle & 1.2 mm Radome)"
     ))
 
-    print(f"19 sections written to {out_dir}")
+    # Model 5 (Sleek Desktop Battery-Free HLK-LD2410S 20x20 mm Enclosure + Detachable V-Stand) sections
+    ls_base, ls_lid, dm5 = ev.make_ld2410s_usb_base(), ev.make_ld2410s_usb_lid(), ev.make_ld2410s_usb_dummies()
+    v_stand_s = ev.make_v_stand(outer_w=ev.OUTER_W_S)
+    shapes5: dict[str, cq.Workplane] = {"ld2410s_usb_base": ls_base, "ld2410s_usb_lid": ls_lid, "v_stand": v_stand_s, **dm5}
+    z_radar_s_usb = e.FLOOR + e.RADAR_RAIL_H + e.RADAR_T / 2
+    z_v_stand = ev.V_MORTISE_Z0 + ev.V_MORTISE_L_Z / 2
+    plot(out_dir, shapes5, SectionSpec(
+        "ld2410s_usb_z_radar", (0.0, 0.0, z_v_stand), (0, 0, 1), (0, 1),
+        f"Model 5 XY section at Z={z_v_stand:.1f} mm (Sleek Desktop HLK-LD2410S Pod + Slotted-In Inverted-V Stand)"
+    ))
+    plot(out_dir, shapes5, SectionSpec(
+        "ld2410s_usb_usbc_y", (0.0, ev.Y_C, 0.0), (0, 1, 0), (0, 2),
+        f"Model 5 XZ section at Y={ev.Y_C:.1f} mm (20x20 mm HLK-LD2410S + SuperMini + Panel-Mount USB-C Socket, No Screw Tabs)"
+    ))
+    plot(out_dir, shapes5, SectionSpec(
+        "ld2410s_usb_radar_x", (-ev.V_MORTISE_X_OFF, 0.0, 0.0), (1, 0, 0), (1, 2),
+        f"Model 5 YZ section at X={-ev.V_MORTISE_X_OFF:.1f} mm (Slotted-In Inverted-V Stand Tenon & Mortise + SuperMini)"
+    ))
+
+    # Model 6 ("Aura-S" — Award-Edition Horizon Stadium Monolith for 20x20 mm HLK-LD2410S) sections
+    as_base, as_lid, as_stand, dm6 = (
+        ev.make_aura_s_base(),
+        ev.make_aura_s_lid(),
+        ev.make_aura_s_stand(),
+        ev.make_aura_s_dummies(),
+    )
+    shapes6: dict[str, cq.Workplane] = {"aura_s_base": as_base, "aura_s_lid": as_lid, "aura_s_stand": as_stand, **dm6}
+    plot(out_dir, shapes6, SectionSpec(
+        "aura_s_front_xy", (0.0, 0.0, z_v_stand), (0, 0, 1), (0, 1),
+        f"Aura-S XY section at Z={z_v_stand:.1f} mm (20x20 mm HLK-LD2410S Stadium Monolith + Rear 13.4 mm USB-C + V-Pedestal)"
+    ))
+    plot(out_dir, shapes6, SectionSpec(
+        "aura_s_center_xz", (0.0, ev.Y_C, 0.0), (0, 1, 0), (0, 2),
+        "Aura-S XZ section at Y=0.0 mm (20x20 mm HLK-LD2410S + SuperMini + Hidden Rear Z=0 13.4 mm USB-C Socket)"
+    ))
+    plot(out_dir, shapes6, SectionSpec(
+        "aura_s_stand_yz", (-ev.V_MORTISE_X_OFF, 0.0, 0.0), (1, 0, 0), (1, 2),
+        f"Aura-S YZ section at X={-ev.V_MORTISE_X_OFF:.1f} mm (34.0 mm Stadium Bevel, Horizon Groove & Slotted V-Pedestal)"
+    ))
+
+    # Model 7 ("Aura-C" — Award-Edition Horizon Stadium Monolith for 22x16 mm HLK-LD2410C) sections
+    ac_base, ac_lid, ac_stand, dm7 = (
+        ev.make_aura_c_base(),
+        ev.make_aura_c_lid(),
+        ev.make_aura_c_stand(),
+        ev.make_aura_c_dummies(),
+    )
+    shapes7: dict[str, cq.Workplane] = {"aura_c_base": ac_base, "aura_c_lid": ac_lid, "aura_c_stand": ac_stand, **dm7}
+    plot(out_dir, shapes7, SectionSpec(
+        "aura_c_front_xy", (0.0, 0.0, z_v_stand), (0, 0, 1), (0, 1),
+        f"Aura-C XY section at Z={z_v_stand:.1f} mm (22x16 mm HLK-LD2410C Stadium Monolith + Rear 13.4 mm USB-C + V-Pedestal)"
+    ))
+    plot(out_dir, shapes7, SectionSpec(
+        "aura_c_center_xz", (0.0, ev.Y_C, 0.0), (0, 1, 0), (0, 2),
+        "Aura-C XZ section at Y=0.0 mm (22x16 mm HLK-LD2410C + SuperMini + Hidden Rear Z=0 13.4 mm USB-C Socket)"
+    ))
+    plot(out_dir, shapes7, SectionSpec(
+        "aura_c_stand_yz", (-ev.V_MORTISE_X_OFF, 0.0, 0.0), (1, 0, 0), (1, 2),
+        f"Aura-C YZ section at X={-ev.V_MORTISE_X_OFF:.1f} mm (32.0 mm Stadium Bevel, Horizon Groove & Slotted V-Pedestal)"
+    ))
+
+    # Model 8 ("Aura-S v2" / "aura_v2") & Model 9 ("Aura-C v2") Compact Stacked Direct-Solder Monoliths
+    as2_base, as2_lid, as2_stand, dm8 = (
+        ev.make_aura_s_v2_base(),
+        ev.make_aura_s_v2_lid(),
+        ev.make_aura_s_v2_stand(),
+        ev.make_aura_s_v2_dummies(),
+    )
+    shapes8: dict[str, cq.Workplane] = {
+        "aura_s_v2_base": as2_base, "aura_s_v2_lid": as2_lid, "aura_s_v2_stand": as2_stand, **dm8
+    }
+    z_v2_stand = ev.V_MORTISE_V2_Z0 + ev.V_MORTISE_V2_L_Z / 2
+    plot(out_dir, shapes8, SectionSpec(
+        "aura_v2_front_xy", (0.0, 0.0, z_v2_stand), (0, 0, 1), (0, 1),
+        f"Aura-S v2 XY section at Z={z_v2_stand:.1f} mm (64x34 mm Compact Stacked Stadium + Rear USB-C + V-Pedestal)"
+    ))
+    plot(out_dir, shapes8, SectionSpec(
+        "aura_v2_center_xz", (0.0, ev.Y_C, 0.0), (0, 1, 0), (0, 2),
+        "Aura-S v2 XZ section at Y=0.0 mm (20x20 mm HLK-LD2410S Stacked Over SuperMini + Rear Z=0 USB-C)"
+    ))
+    plot(out_dir, shapes8, SectionSpec(
+        "aura_v2_stack_yz", (ev.RADAR_AURA_V2_X, 0.0, 0.0), (1, 0, 0), (1, 2),
+        f"Aura-S v2 YZ section at X={ev.RADAR_AURA_V2_X:.1f} mm (Stepped Amphitheater Stack: SuperMini Z=5.4 + LD2410S Z=15.9)"
+    ))
+
+    ac2_base, ac2_lid, ac2_stand, dm9 = (
+        ev.make_aura_c_v2_base(),
+        ev.make_aura_c_v2_lid(),
+        ev.make_aura_c_v2_stand(),
+        ev.make_aura_c_v2_dummies(),
+    )
+    shapes9: dict[str, cq.Workplane] = {
+        "aura_c_v2_base": ac2_base, "aura_c_v2_lid": ac2_lid, "aura_c_v2_stand": ac2_stand, **dm9
+    }
+    plot(out_dir, shapes9, SectionSpec(
+        "aura_c_v2_center_xz", (0.0, ev.Y_C, 0.0), (0, 1, 0), (0, 2),
+        "Aura-C v2 XZ section at Y=0.0 mm (22x16 mm HLK-LD2410C Stacked Over SuperMini + Rear Z=0 USB-C)"
+    ))
+    plot(out_dir, shapes9, SectionSpec(
+        "aura_c_v2_stack_yz", (ev.RADAR_AURA_V2_X, 0.0, 0.0), (1, 0, 0), (1, 2),
+        f"Aura-C v2 YZ section at X={ev.RADAR_AURA_V2_X:.1f} mm (Corbelled Stack: SuperMini Z=5.4 + LD2410C Z=15.9)"
+    ))
+
+    # USB-C Socket 4-Way Fit-Test Gauge section (combines Z=12.5 mm slot plane + Z=2.7 mm embossed text plane)
+    usbc_test = ev.make_usbc_socket_fit_test()
+    usbc_test_labels = usbc_test.translate((0.0, 0.0, ev.USBC_SOCK_Z - (e.FLOOR + 0.3)))
+    plot(out_dir, {"usbc_socket_fit_test": usbc_test, "fit_test_labels": usbc_test_labels}, SectionSpec(
+        "usbc_socket_fit_test_z", (0.0, 0.0, ev.USBC_SOCK_Z), (0, 0, 1), (0, 1),
+        f"Fit-Test XY section at Z={ev.USBC_SOCK_Z:.1f} mm (+0.5, +1.0, +1.5, +2.0 mm Wider USB-C Slots + Front Apron Text)"
+    ))
+
+    print(f"34 sections written to {out_dir}")
 
 
 if __name__ == "__main__":
