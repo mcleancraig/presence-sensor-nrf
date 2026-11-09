@@ -307,32 +307,43 @@ def main() -> int:
         print(f"Target device : {slug}")
         print(f"Firmware image: {fw_path} ({fw_size} bytes, CRC32=0x{fw_crc32:08X})")
 
-        # 1. Begin FOTA session
-        begin_cmd = json.dumps({"action": "begin", "size": fw_size, "crc32": fw_crc32}).encode("utf-8")
-        ready = False
-        for attempt in range(4):
-            client.publish(cmd_topic, begin_cmd)
-            resp = wait_status_json(client, status_topic, timeout=4.0)
-            if resp and resp.get("state") == "ready":
-                ready = True
-                break
-            if resp and resp.get("state") == "error":
-                print(f"ERROR from device on begin: {resp}", file=sys.stderr)
+        # 1. Check if device already has an active staging session we can resume, else Begin FOTA session
+        offset = 0
+        client.publish(cmd_topic, b'{"action":"ping"}')
+        ping_resp = wait_status_json(client, status_topic, timeout=4.0)
+        if (
+            ping_resp
+            and ping_resp.get("state") == "staging"
+            and 0 < int(ping_resp.get("offset", 0)) <= fw_size
+        ):
+            offset = int(ping_resp["offset"])
+            print(f"Resuming active FOTA staging session on {slug} at offset {offset}/{fw_size} bytes...")
+        else:
+            begin_cmd = json.dumps({"action": "begin", "size": fw_size, "crc32": fw_crc32}).encode("utf-8")
+            ready = False
+            for attempt in range(4):
+                client.publish(cmd_topic, begin_cmd)
+                resp = wait_status_json(client, status_topic, timeout=4.0)
+                if resp and resp.get("state") == "ready":
+                    ready = True
+                    break
+                if resp and resp.get("state") == "error":
+                    print(f"ERROR from device on begin: {resp}", file=sys.stderr)
+                    return 1
+            if not ready:
+                print(f"ERROR: Device {slug} did not acknowledge FOTA begin command.", file=sys.stderr)
                 return 1
-        if not ready:
-            print(f"ERROR: Device {slug} did not acknowledge FOTA begin command.", file=sys.stderr)
-            return 1
 
         # 2. Stream binary chunks with per-chunk ACK + automatic retry
-        offset = 0
+        start_offset = offset
         t_start = time.monotonic()
         while offset < fw_size:
             piece = fw_bytes[offset : offset + CHUNK_SIZE]
             pkt = struct.pack("<I", offset) + piece
             acked = False
-            for retry in range(6):
+            for retry in range(12):
                 client.publish(chunk_topic, pkt)
-                resp = wait_status_json(client, status_topic, timeout=2.5)
+                resp = wait_status_json(client, status_topic, timeout=3.0)
                 if not resp:
                     continue
                 if resp.get("state") == "error":
@@ -353,7 +364,8 @@ def main() -> int:
                 return 1
 
             elapsed = max(0.001, time.monotonic() - t_start)
-            rate_kbps = (offset / 1024.0) / elapsed
+            sent_this_run = max(0, offset - start_offset)
+            rate_kbps = (sent_this_run / 1024.0) / elapsed
             pct = (offset * 100.0) / fw_size
             sys.stdout.write(f"\rStaging slot1: {offset}/{fw_size} bytes ({pct:5.1f}%) [{rate_kbps:4.1f} KB/s]")
             sys.stdout.flush()

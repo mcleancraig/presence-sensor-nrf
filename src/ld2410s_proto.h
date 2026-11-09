@@ -38,6 +38,12 @@ struct Ld2410sReport {
     uint16_t           distanceMm;
     bool               isMinimalFrame;
     bool               isLd2410cFrame;
+    uint8_t            rawState;
+    uint8_t            movingEnergy;
+    uint8_t            stationaryEnergy;
+    uint16_t           movingDistanceCm;
+    uint16_t           stationaryDistanceCm;
+    uint16_t           detectionDistanceCm;
 };
 
 struct Ld2410sAck {
@@ -72,15 +78,20 @@ static constexpr size_t  kMinimalFrameSize   = 5;
 static constexpr uint16_t kCmdEnterConfig           = 0x00FF;
 static constexpr uint16_t kCmdExitConfig            = 0x00FE;
 static constexpr uint16_t kCmdWriteMaxGateAndHold   = 0x0060; // HLK-LD2410C max distance gate & hold
+static constexpr uint16_t kCmdWriteGateSensitivity  = 0x0064; // HLK-LD2410C distance gate motion/static sensitivity
 static constexpr uint16_t kCmdWriteCommonParams     = 0x0070; // HLK-LD2410S common parameters
 static constexpr uint16_t kCmdReadCommonParams      = 0x0071;
 static constexpr uint16_t kCmdSwitchOutputMode      = 0x007A;
 static constexpr uint16_t kAckBitMask               = 0x0100;
 
-// Parameter words for HLK-LD2410C command 0x0060
+// Parameter words for HLK-LD2410C commands 0x0060 & 0x0064
 static constexpr uint16_t kLd2410cParamMaxMovingGate     = 0x0000;
 static constexpr uint16_t kLd2410cParamMaxStationaryGate = 0x0001;
 static constexpr uint16_t kLd2410cParamUnoccupiedHoldSec = 0x0002;
+static constexpr uint16_t kLd2410cParamGateIndex         = 0x0000;
+static constexpr uint16_t kLd2410cParamMotionSens        = 0x0001;
+static constexpr uint16_t kLd2410cParamStationarySens    = 0x0002;
+static constexpr uint16_t kLd2410cAllGates               = 0xFFFF;
 static constexpr uint8_t  kLd2410cReportHead             = 0xAA;
 static constexpr uint8_t  kLd2410cReportTail             = 0x55;
 static constexpr uint8_t  kLd2410cReportCheck            = 0x00;
@@ -120,6 +131,7 @@ static constexpr uint16_t kDefaultMaxBathroomDistanceMm   =
 static constexpr size_t kEnterConfigFrameSize             = 14;
 static constexpr size_t kExitConfigFrameSize              = 12;
 static constexpr size_t kLd2410cWriteMaxGateFrameSize     = 30;
+static constexpr size_t kLd2410cWriteGateSensFrameSize    = 30;
 static constexpr size_t kWriteCommonParamsFrameSize       = 48;
 static constexpr size_t kSwitchOutputModeFrameSize        = 18;
 
@@ -140,6 +152,19 @@ size_t BuildExitConfigCmd(uint8_t *outBuf, size_t maxLen);
  * @return Frame length in bytes, or 0 if maxLen < 30.
  */
 size_t BuildLd2410cWriteMaxGateAndHoldCmd(const Ld2410cConfigParams &params, uint8_t *outBuf, size_t maxLen);
+
+/**
+ * @brief Build HLK-LD2410C 0x0064 Write Distance Gate Sensitivity command frame (30 bytes).
+ * @param gate Gate index 0..8, or kLd2410cAllGates (0xFFFF) to set all gates simultaneously.
+ * @param motionSensitivity Motion trigger threshold (0..100).
+ * @param stationarySensitivity Stationary hold threshold (0..100).
+ * @return Frame length in bytes, or 0 if maxLen < 30.
+ */
+size_t BuildLd2410cWriteGateSensitivityCmd(uint16_t gate,
+                                           uint32_t motionSensitivity,
+                                           uint32_t stationarySensitivity,
+                                           uint8_t *outBuf,
+                                           size_t maxLen);
 
 /**
  * @brief Build 0x0070 Write Common Parameters command frame (48 bytes).
@@ -211,6 +236,9 @@ public:
     static constexpr uint16_t kMotionDeltaThresholdMm       = 100u;  // 10 cm radial movement threshold
     static constexpr int64_t  kMotionHoldWindowMs           = 5000;  // 5.0 s active motion hold window
     static constexpr int64_t  kDefaultOccupancyHoldWindowMs = 30000; // 30.0 s stationary occupancy hold window
+    static constexpr uint8_t  kLd2410cMinMovingEnergy       = 35u;   // Reject low-energy (<35) Doppler noise spikes
+    static constexpr uint8_t  kMinConsecutiveMovingForHold  = 2u;    // Require >=2 moving frames when delta < 100 mm
+    static constexpr uint8_t  kMinConsecutiveMovingToWake   = 3u;    // Require >=3 moving frames to wake if delta < 100 mm
 
     Ld2410sMotionTracker();
 
@@ -235,6 +263,7 @@ public:
 private:
     int64_t  mLastMotionDetectedMs;
     uint16_t mLastMotionAnchorDistMm;
+    uint8_t  mConsecutiveMovingFrames;
     bool     mWasOccupied;
     bool     mHasMotionTimestamp;
 };

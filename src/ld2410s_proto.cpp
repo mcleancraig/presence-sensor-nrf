@@ -72,19 +72,27 @@ static void PopulateReportFromRaw(uint8_t rawState,
         motion   = true;
     }
 
-    outFrame->type                  = Ld2410sFrameType::Report;
-    outFrame->report.state          = state;
-    outFrame->report.occupied       = occupied;
-    outFrame->report.motion         = motion;
-    outFrame->report.distanceCm     = distCm;
-    outFrame->report.distanceMm     = CmToMmClamped(distCm, occupied);
-    outFrame->report.isMinimalFrame = isMinimalFrame;
-    outFrame->report.isLd2410cFrame = false;
+    outFrame->type                        = Ld2410sFrameType::Report;
+    outFrame->report.state                = state;
+    outFrame->report.occupied             = occupied;
+    outFrame->report.motion               = motion;
+    outFrame->report.distanceCm           = distCm;
+    outFrame->report.distanceMm           = CmToMmClamped(distCm, occupied);
+    outFrame->report.isMinimalFrame       = isMinimalFrame;
+    outFrame->report.isLd2410cFrame       = false;
+    outFrame->report.rawState             = rawState;
+    outFrame->report.movingEnergy         = 0u;
+    outFrame->report.stationaryEnergy     = 0u;
+    outFrame->report.movingDistanceCm     = motion ? distCm : 0u;
+    outFrame->report.stationaryDistanceCm = (!motion && occupied) ? distCm : 0u;
+    outFrame->report.detectionDistanceCm  = distCm;
 }
 
 static void PopulateLd2410cReportFromRaw(uint8_t rawState,
                                          uint16_t movingDistCm,
+                                         uint8_t movingEnergy,
                                          uint16_t stationaryDistCm,
+                                         uint8_t stationaryEnergy,
                                          uint16_t detectionDistCm,
                                          Ld2410sParsedFrame *outFrame)
 {
@@ -94,30 +102,34 @@ static void PopulateLd2410cReportFromRaw(uint8_t rawState,
     uint16_t distCm          = 0u;
 
     if (rawState == 0x01u) {
-        // HLK-LD2410C 0x01 = Moving target (unlike HLK-LD2410S where 0x01 = Unoccupied)
+        // HLK-LD2410C 0x01 = Moving target (unlike HLK-LD2410S where 0x01 = Unoccupied):
+        // Use raw movingDistCm first so the radar's internal IIR filter on detectionDistCm
+        // never masks out-of-bounds moving gates or generates synthetic IIR glide motion.
         state    = Ld2410sTargetState::Moving;
         occupied = true;
         motion   = true;
-        distCm   = (detectionDistCm > 0u)
-                       ? detectionDistCm
-                       : ((movingDistCm > 0u) ? movingDistCm : stationaryDistCm);
+        distCm   = (movingDistCm > 0u)
+                       ? movingDistCm
+                       : ((detectionDistCm > 0u) ? detectionDistCm : stationaryDistCm);
     } else if (rawState == 0x02u) {
-        // HLK-LD2410C 0x02 = Stationary target
+        // HLK-LD2410C 0x02 = Stationary target: use stationaryDistCm first so post-motion
+        // IIR decay on detectionDistCm does not produce fake >= 100 mm radial distance steps.
         state    = Ld2410sTargetState::Stationary;
         occupied = true;
         motion   = false;
-        distCm   = (detectionDistCm > 0u)
-                       ? detectionDistCm
-                       : ((stationaryDistCm > 0u) ? stationaryDistCm : movingDistCm);
+        distCm   = (stationaryDistCm > 0u)
+                       ? stationaryDistCm
+                       : ((detectionDistCm > 0u) ? detectionDistCm : movingDistCm);
     } else if (rawState >= 0x03u) {
-        // HLK-LD2410C 0x03 = Moving + Stationary target: use smoothed detectionDistCm first
-        // (with fallback to movingDistCm/stationaryDistCm) so raw gate hopping does not jitter.
+        // HLK-LD2410C 0x03 = Moving + Stationary target: use movingDistCm first so an
+        // out-of-bounds moving gate (e.g. Gate 4 >= 300 cm) is never pulled inside the room
+        // boundary by a near-field stationary clutter reflection via detectionDistCm.
         state    = Ld2410sTargetState::Moving;
         occupied = true;
         motion   = true;
-        distCm   = (detectionDistCm > 0u)
-                       ? detectionDistCm
-                       : ((movingDistCm > 0u) ? movingDistCm : stationaryDistCm);
+        distCm   = (movingDistCm > 0u)
+                       ? movingDistCm
+                       : ((detectionDistCm > 0u) ? detectionDistCm : stationaryDistCm);
     }
 
     // On HLK-LD2410C, targets in Gate 0 (< 75 cm, right in front of the radar) can report
@@ -127,14 +139,20 @@ static void PopulateLd2410cReportFromRaw(uint8_t rawState,
         distCm = 35u;
     }
 
-    outFrame->type                  = Ld2410sFrameType::Report;
-    outFrame->report.state          = state;
-    outFrame->report.occupied       = occupied;
-    outFrame->report.motion         = motion;
-    outFrame->report.distanceCm     = distCm;
-    outFrame->report.distanceMm     = CmToMmClamped(distCm, occupied);
-    outFrame->report.isMinimalFrame = false;
-    outFrame->report.isLd2410cFrame = true;
+    outFrame->type                        = Ld2410sFrameType::Report;
+    outFrame->report.state                = state;
+    outFrame->report.occupied             = occupied;
+    outFrame->report.motion               = motion;
+    outFrame->report.distanceCm           = distCm;
+    outFrame->report.distanceMm           = CmToMmClamped(distCm, occupied);
+    outFrame->report.isMinimalFrame       = false;
+    outFrame->report.isLd2410cFrame       = true;
+    outFrame->report.rawState             = rawState;
+    outFrame->report.movingEnergy         = movingEnergy;
+    outFrame->report.stationaryEnergy     = stationaryEnergy;
+    outFrame->report.movingDistanceCm     = movingDistCm;
+    outFrame->report.stationaryDistanceCm = stationaryDistCm;
+    outFrame->report.detectionDistanceCm  = detectionDistCm;
 }
 
 size_t BuildEnterConfigCmd(uint8_t *outBuf, size_t maxLen)
@@ -194,6 +212,46 @@ size_t BuildLd2410cWriteMaxGateAndHoldCmd(const Ld2410cConfigParams &params, uin
 
     memcpy(&outBuf[offset], kCmdFooter, 4);
     return kLd2410cWriteMaxGateFrameSize;
+}
+
+size_t BuildLd2410cWriteGateSensitivityCmd(uint16_t gate,
+                                           uint32_t motionSensitivity,
+                                           uint32_t stationarySensitivity,
+                                           uint8_t *outBuf,
+                                           size_t maxLen)
+{
+    if (!outBuf || maxLen < kLd2410cWriteGateSensFrameSize) {
+        return 0;
+    }
+
+    const uint32_t gateVal = (gate == kLd2410cAllGates)
+                                 ? static_cast<uint32_t>(kLd2410cAllGates)
+                                 : ClampU32(static_cast<uint32_t>(gate), 0u, kLd2410cMaxGate);
+
+    struct ParamEntry {
+        uint16_t id;
+        uint32_t val;
+    };
+
+    const ParamEntry entries[3] = {
+        {kLd2410cParamGateIndex,      gateVal},
+        {kLd2410cParamMotionSens,     ClampU32(motionSensitivity, 0u, 100u)},
+        {kLd2410cParamStationarySens, ClampU32(stationarySensitivity, 0u, 100u)},
+    };
+
+    memcpy(&outBuf[0], kCmdHeader, 4);
+    WriteU16Le(&outBuf[4], 2u + 3u * 6u); // 20 bytes (0x0014)
+    WriteU16Le(&outBuf[6], kCmdWriteGateSensitivity);
+
+    size_t offset = 8;
+    for (size_t i = 0; i < 3; ++i) {
+        WriteU16Le(&outBuf[offset], entries[i].id);
+        WriteU32Le(&outBuf[offset + 2], entries[i].val);
+        offset += 6;
+    }
+
+    memcpy(&outBuf[offset], kCmdFooter, 4);
+    return kLd2410cWriteGateSensFrameSize;
 }
 
 size_t BuildWriteCommonParamsCmd(const Ld2410sConfigParams &params, uint8_t *outBuf, size_t maxLen)
@@ -355,7 +413,9 @@ int Ld2410sFrameParser::TryParseStdReportFrame(Ld2410sParsedFrame *outFrame)
             mBuf[totalFrameLen - 6] == kLd2410cReportTail) {
             PopulateLd2410cReportFromRaw(mBuf[8],
                                          ReadU16Le(&mBuf[9]),
+                                         mBuf[11],
                                          ReadU16Le(&mBuf[12]),
+                                         mBuf[14],
                                          ReadU16Le(&mBuf[15]),
                                          outFrame);
             DiscardPrefix(totalFrameLen);
@@ -452,6 +512,7 @@ bool Ld2410sFrameParser::TryParseBuffer(Ld2410sParsedFrame *outFrame)
 Ld2410sMotionTracker::Ld2410sMotionTracker()
     : mLastMotionDetectedMs(0),
       mLastMotionAnchorDistMm(0u),
+      mConsecutiveMovingFrames(0u),
       mWasOccupied(false),
       mHasMotionTimestamp(false)
 {
@@ -459,17 +520,19 @@ Ld2410sMotionTracker::Ld2410sMotionTracker()
 
 void Ld2410sMotionTracker::Reset()
 {
-    mLastMotionDetectedMs   = 0;
-    mLastMotionAnchorDistMm = 0u;
-    mWasOccupied            = false;
-    mHasMotionTimestamp     = false;
+    mLastMotionDetectedMs    = 0;
+    mLastMotionAnchorDistMm  = 0u;
+    mConsecutiveMovingFrames = 0u;
+    mWasOccupied             = false;
+    mHasMotionTimestamp      = false;
 }
 
 void Ld2410sMotionTracker::NotifyEntryEdge(int64_t nowMs)
 {
-    mWasOccupied        = true;
-    mHasMotionTimestamp = true;
-    mLastMotionDetectedMs = nowMs;
+    mWasOccupied             = true;
+    mHasMotionTimestamp      = true;
+    mLastMotionDetectedMs    = nowMs;
+    mConsecutiveMovingFrames = 1u;
 }
 
 void Ld2410sMotionTracker::Update(Ld2410sReport *inoutReport,
@@ -481,15 +544,49 @@ void Ld2410sMotionTracker::Update(Ld2410sReport *inoutReport,
         return;
     }
 
-    // Clamp far-field reflections beyond the configured bathroom boundary (e.g. > 2100 mm)
+    // On HLK-LD2410C frames, filter out low-energy Doppler noise spikes (< kLd2410cMinMovingEnergy)
+    // when movingEnergy is populated (> 0):
+    if (inoutReport->isLd2410cFrame &&
+        (inoutReport->motion || inoutReport->state == Ld2410sTargetState::Moving) &&
+        inoutReport->movingEnergy > 0u &&
+        inoutReport->movingEnergy < kLd2410cMinMovingEnergy) {
+        if (inoutReport->rawState >= 0x03u && inoutReport->stationaryDistanceCm > 0u) {
+            inoutReport->state      = Ld2410sTargetState::Stationary;
+            inoutReport->motion     = false;
+            inoutReport->distanceCm = inoutReport->stationaryDistanceCm;
+            inoutReport->distanceMm = static_cast<uint16_t>(inoutReport->stationaryDistanceCm * 10u);
+        } else {
+            inoutReport->state      = Ld2410sTargetState::Unoccupied;
+            inoutReport->occupied   = false;
+            inoutReport->motion     = false;
+            inoutReport->distanceCm = 0u;
+            inoutReport->distanceMm = 0u;
+        }
+    }
+
+    // Clamp far-field reflections beyond the configured room boundary (e.g. > 2100 mm or > 2950 mm)
     if (inoutReport->occupied && maxValidDistanceMm > 0u && inoutReport->distanceMm > maxValidDistanceMm) {
-        inoutReport->state      = Ld2410sTargetState::Unoccupied;
-        inoutReport->occupied   = false;
-        inoutReport->motion     = false;
-        inoutReport->distanceCm = 0u;
-        inoutReport->distanceMm = 0u;
-        Reset();
-        return;
+        // On HLK-LD2410C state 0x03 (Moving + Stationary), if only the moving gate is beyond the
+        // wall boundary while the stationary gate is inside the room, downgrade to Stationary so
+        // an in-room occupant does not lose stationary presence, without triggering false motion.
+        const uint32_t statMm = static_cast<uint32_t>(inoutReport->stationaryDistanceCm) * 10u;
+        if (inoutReport->isLd2410cFrame &&
+            inoutReport->rawState >= 0x03u &&
+            statMm > 0u &&
+            statMm <= maxValidDistanceMm) {
+            inoutReport->state      = Ld2410sTargetState::Stationary;
+            inoutReport->motion     = false;
+            inoutReport->distanceCm = inoutReport->stationaryDistanceCm;
+            inoutReport->distanceMm = static_cast<uint16_t>(statMm);
+        } else {
+            inoutReport->state      = Ld2410sTargetState::Unoccupied;
+            inoutReport->occupied   = false;
+            inoutReport->motion     = false;
+            inoutReport->distanceCm = 0u;
+            inoutReport->distanceMm = 0u;
+            Reset();
+            return;
+        }
     }
 
     if (!inoutReport->occupied) {
@@ -501,6 +598,15 @@ void Ld2410sMotionTracker::Update(Ld2410sReport *inoutReport,
         }
         Reset();
         return;
+    }
+
+    const bool rawIsMoving = inoutReport->motion || (inoutReport->state == Ld2410sTargetState::Moving);
+    if (rawIsMoving) {
+        if (mConsecutiveMovingFrames < 255u) {
+            ++mConsecutiveMovingFrames;
+        }
+    } else {
+        mConsecutiveMovingFrames = 0u;
     }
 
     if (!mWasOccupied) {
@@ -519,17 +625,30 @@ void Ld2410sMotionTracker::Update(Ld2410sReport *inoutReport,
         const bool wasExpired = mHasMotionTimestamp &&
                                 (occupancyHoldWindowMs > 0) &&
                                 ((nowMs - mLastMotionDetectedMs) >= occupancyHoldWindowMs);
-        const bool isDopplerMovingOn2410c =
-            inoutReport->isLd2410cFrame &&
-            (inoutReport->motion || (inoutReport->state == Ld2410sTargetState::Moving));
         const bool canTriggerMotion =
-            inoutReport->isMinimalFrame ||
-            inoutReport->motion ||
-            (inoutReport->state == Ld2410sTargetState::Moving);
+            inoutReport->isMinimalFrame || rawIsMoving;
 
-        if (isDopplerMovingOn2410c) {
-            // HLK-LD2410C dedicated Doppler moving gates (0x01 / 0x03) detect seated typing,
-            // head/arm motion, and fine posture shifts even when radial distance delta is < 100 mm.
+        const uint16_t distDeltaMm =
+            (mLastMotionAnchorDistMm == 0u)
+                ? inoutReport->distanceMm
+                : ((inoutReport->distanceMm > mLastMotionAnchorDistMm)
+                       ? static_cast<uint16_t>(inoutReport->distanceMm - mLastMotionAnchorDistMm)
+                       : static_cast<uint16_t>(mLastMotionAnchorDistMm - inoutReport->distanceMm));
+
+        // On HLK-LD2410C, sub-100 mm seated Doppler motion refreshes the hold timer when the room
+        // is actively occupied (!wasExpired) and either movingEnergy == 0 (unit test fixture) or
+        // >= kMinConsecutiveMovingForHold consecutive moving frames arrive (rejecting 1-frame noise).
+        // Once occupancy has expired (wasExpired == true), waking requires >= 100 mm radial shift
+        // or >= kMinConsecutiveMovingToWake consecutive moving frames.
+        const bool isSustainedSeatedDopplerOn2410c =
+            inoutReport->isLd2410cFrame &&
+            rawIsMoving &&
+            (!wasExpired
+                 ? (inoutReport->movingEnergy == 0u ||
+                    mConsecutiveMovingFrames >= kMinConsecutiveMovingForHold)
+                 : (mConsecutiveMovingFrames >= kMinConsecutiveMovingToWake));
+
+        if (isSustainedSeatedDopplerOn2410c) {
             mLastMotionAnchorDistMm = inoutReport->distanceMm;
             mHasMotionTimestamp     = true;
             mLastMotionDetectedMs   = nowMs;
@@ -541,17 +660,10 @@ void Ld2410sMotionTracker::Update(Ld2410sReport *inoutReport,
                     mLastMotionDetectedMs = nowMs;
                 }
             }
-        } else {
-            const uint16_t distDeltaMm =
-                (inoutReport->distanceMm > mLastMotionAnchorDistMm)
-                    ? static_cast<uint16_t>(inoutReport->distanceMm - mLastMotionAnchorDistMm)
-                    : static_cast<uint16_t>(mLastMotionAnchorDistMm - inoutReport->distanceMm);
-
-            if (distDeltaMm >= kMotionDeltaThresholdMm && canTriggerMotion) {
-                mLastMotionAnchorDistMm = inoutReport->distanceMm;
-                mHasMotionTimestamp     = true;
-                mLastMotionDetectedMs   = nowMs;
-            }
+        } else if (distDeltaMm >= kMotionDeltaThresholdMm && canTriggerMotion) {
+            mLastMotionAnchorDistMm = inoutReport->distanceMm;
+            mHasMotionTimestamp     = true;
+            mLastMotionDetectedMs   = nowMs;
         }
     }
 

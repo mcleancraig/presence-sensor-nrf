@@ -68,6 +68,12 @@ public:
     bool IsOt2SignalSeen() const { return mOt2SignalSeen; }
 
     /**
+     * @brief Access the latest raw UART report and byte counter for wireless diagnostics.
+     */
+    const Ld2410sReport &GetLastValidReport() const { return mLastValidReport; }
+    uint32_t GetRxBytesSeen() const { return mRxBytesSeen; }
+
+    /**
      * @brief Emit a concise diagnostic telemetry line for USB CDC ACM serial debugging.
      */
     void LogDiagnostics(const Ld2410sReport &report, const char *reasonTag) const;

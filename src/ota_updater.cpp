@@ -266,6 +266,7 @@ OtaUpdater::OtaUpdater()
       mExpectedCrc32(0u),
       mReceivedBytes(0u),
       mErasedEndOffset(0u),
+      mDiag{},
       mActive(false)
 {
 }
@@ -340,7 +341,7 @@ void OtaUpdater::HandleCmdMessage(const char *json,
                                   void *publishCtx)
 {
     OtaCommand cmd{};
-    char statusBuf[192] = {};
+    char statusBuf[256] = {};
 
     if (!OtaProto::ParseCommandJson(json, len, &cmd)) {
         snprintf(statusBuf, sizeof(statusBuf), "{\"state\":\"error\",\"reason\":\"invalid_cmd\"}");
@@ -354,12 +355,23 @@ void OtaUpdater::HandleCmdMessage(const char *json,
     case OtaCommandAction::Ping:
         snprintf(statusBuf,
                  sizeof(statusBuf),
-                 "{\"state\":\"%s\",\"version\":\"%s\",\"build\":%d,\"offset\":%u,\"slot_max\":%u}",
+                 "{\"state\":\"%s\",\"version\":\"%s\",\"build\":%d,\"offset\":%u,\"slot_max\":%u,"
+                 "\"up_s\":%u,\"cfg\":%u,\"raw\":%u,\"mov_cm\":%u,\"mov_e\":%u,"
+                 "\"stat_cm\":%u,\"stat_e\":%u,\"det_cm\":%u,\"rx_b\":%u}",
                  mActive ? "staging" : "idle",
                  APP_VERSION_STRING,
                  APP_BUILD_NUMBER,
                  static_cast<unsigned>(mReceivedBytes),
-                 static_cast<unsigned>(OtaProto::kMaxFirmwareSize));
+                 static_cast<unsigned>(OtaProto::kMaxFirmwareSize),
+                 static_cast<unsigned>(k_uptime_get() / 1000),
+                 mDiag.configured ? 1u : 0u,
+                 static_cast<unsigned>(mDiag.rawState),
+                 static_cast<unsigned>(mDiag.movingDistCm),
+                 static_cast<unsigned>(mDiag.movingEnergy),
+                 static_cast<unsigned>(mDiag.stationaryDistCm),
+                 static_cast<unsigned>(mDiag.stationaryEnergy),
+                 static_cast<unsigned>(mDiag.detectionDistCm),
+                 static_cast<unsigned>(mDiag.rxBytes));
         if (publishFn) {
             (void)publishFn(publishCtx, mStatusTopic, statusBuf);
         }

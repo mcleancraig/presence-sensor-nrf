@@ -41,6 +41,7 @@ public:
      *        MQTT keepalive/input, and restores 5000 ms SED idle poll after fast-poll bursts.
      */
     void ProcessBackground();
+    void UpdateRadarDiag(const OtaRadarDiag &diag) { mOtaUpdater.SetRadarDiag(diag); }
 
     const char *GetDeviceName() const { return mDeviceName; }
     const char *GetNodeSlug() const { return mNodeSlug; }
@@ -54,6 +55,7 @@ private:
 
     bool ResolveBrokerNat64Address(struct in6_addr *outAddr6);
     void SetFastPoll(bool fast);
+    void ConfigureSocketTimeouts();
     void PumpSocket(int32_t timeoutMs);
     int ConnectToBroker();
     void DisconnectBroker();
@@ -82,11 +84,13 @@ private:
     int64_t              mLastConnectAttemptMs;
     int64_t              mLastDiscoveryStepMs;
     int64_t              mLastPingSentMs;
+    int64_t              mLastOnlinePublishMs;
     uint16_t             mNextMsgId;
     uint8_t              mPacketId;
     uint8_t              mDiscoveryStep;
     bool                 mConnected;
     bool                 mConnackReceived;
     bool                 mHasPendingPublish;
+    bool                 mHasValidMeasurement;
     bool                 mFastPollActive;
 };

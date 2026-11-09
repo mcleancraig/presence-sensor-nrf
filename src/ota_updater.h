@@ -77,6 +77,19 @@ bool ParseChunkHeader(const uint8_t *buf,
 #ifdef __ZEPHYR__
 #include <zephyr/device.h>
 
+struct OtaRadarDiag {
+    uint8_t  rawState;
+    uint8_t  movingEnergy;
+    uint8_t  stationaryEnergy;
+    uint16_t movingDistCm;
+    uint16_t stationaryDistCm;
+    uint16_t detectionDistCm;
+    uint32_t rxBytes;
+    bool     configured;
+    bool     occupied;
+    bool     motion;
+};
+
 class OtaUpdater {
 public:
     using StatusPublishFn = int (*)(void *ctx, const char *topic, const char *jsonPayload);
@@ -84,6 +97,7 @@ public:
     OtaUpdater();
 
     int Init(const char *nodeSlug);
+    void SetRadarDiag(const OtaRadarDiag &diag) { mDiag = diag; }
 
     const char *GetCmdTopic() const { return mCmdTopic; }
     const char *GetChunkTopic() const { return mChunkTopic; }
@@ -116,6 +130,7 @@ private:
     uint32_t             mExpectedCrc32;
     uint32_t             mReceivedBytes;
     uint32_t             mErasedEndOffset;
+    OtaRadarDiag         mDiag;
     bool                 mActive;
 };
 #endif // __ZEPHYR__

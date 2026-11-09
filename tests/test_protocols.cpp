@@ -154,6 +154,25 @@ static void TestLd2410sCommandBuilders()
     EXPECT_EQ(buf[16], 8u, "HLK-LD2410C maxStationaryGate clamped to 8");
     EXPECT_EQ(buf[22], 0xFFu, "HLK-LD2410C unoccupiedHoldSec clamped low byte == 0xFF");
     EXPECT_EQ(buf[23], 0xFFu, "HLK-LD2410C unoccupiedHoldSec clamped high byte == 0xFF");
+
+    // 7. HLK-LD2410C Write Distance Gate Sensitivity (0x0064) -> 30 bytes
+    const uint8_t expectedSensAll[30] = {
+        0xFD, 0xFC, 0xFB, 0xFA,
+        0x14, 0x00,                         // 20 bytes payload
+        0x64, 0x00,                         // Command 0x0064
+        0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, // Word 0x0000 (gate = 0xFFFF all gates)
+        0x01, 0x00, 50u,  0x00, 0x00, 0x00, // Word 0x0001 (motion sensitivity = 50)
+        0x02, 0x00, 60u,  0x00, 0x00, 0x00, // Word 0x0002 (stationary sensitivity = 60)
+        0x04, 0x03, 0x02, 0x01
+    };
+    EXPECT_EQ(Ld2410sProto::BuildLd2410cWriteGateSensitivityCmd(
+                  Ld2410sProto::kLd2410cAllGates, 50u, 60u, buf, 29u),
+              0u, "BuildLd2410cWriteGateSensitivityCmd rejects short buffer");
+    EXPECT_EQ(Ld2410sProto::BuildLd2410cWriteGateSensitivityCmd(
+                  Ld2410sProto::kLd2410cAllGates, 50u, 60u, buf, sizeof(buf)),
+              sizeof(expectedSensAll), "BuildLd2410cWriteGateSensitivityCmd length == 30");
+    EXPECT_EQ(memcmp(buf, expectedSensAll, sizeof(expectedSensAll)), 0,
+              "BuildLd2410cWriteGateSensitivityCmd byte-exact match");
 }
 
 static void TestLd2410sParserMinimalAndEdgeCases()
@@ -579,6 +598,68 @@ static void TestLd2410sMotionTrackerKinematics()
     };
     tracker.Update(&r9FarOffice, 125000, 2950u, 180000);
     EXPECT_TRUE(r9FarOffice.occupied, "2850 mm target inside 2950 mm office boundary stays occupied");
+
+    // 10. HLK-LD2410C overnight anti-latching verification:
+    //     a) Low-energy Doppler noise (< 35 movingEnergy) on 0x01 or 0x03 must NOT refresh hold or trigger motion.
+    Ld2410sReport r10LowEnergyNoise = {
+        .state                = Ld2410sTargetState::Moving,
+        .occupied             = true,
+        .motion               = true,
+        .distanceCm           = 100u,
+        .distanceMm           = 1000u,
+        .isMinimalFrame       = false,
+        .isLd2410cFrame       = true,
+        .rawState             = 0x03u,
+        .movingEnergy         = 22u, // Below kLd2410cMinMovingEnergy (35)
+        .stationaryEnergy     = 80u,
+        .movingDistanceCm     = 100u,
+        .stationaryDistanceCm = 95u,
+        .detectionDistanceCm  = 98u,
+    };
+    tracker.Update(&r10LowEnergyNoise, 200000, 2950u, 180000);
+    EXPECT_TRUE(!r10LowEnergyNoise.motion, "Low-energy (<35) LD2410C Doppler spike is downgraded to Stationary");
+    EXPECT_EQ(tracker.GetLastMotionTimestampMs(), 125000, "Low-energy (<35) Doppler spike does NOT reset hold timer");
+
+    //     b) Single isolated 1-frame moving glitch (movingEnergy=45, delta < 100 mm) must NOT reset hold timer:
+    Ld2410sReport r10SingleGlitch = {
+        .state                = Ld2410sTargetState::Moving,
+        .occupied             = true,
+        .motion               = true,
+        .distanceCm           = 96u,
+        .distanceMm           = 960u, // Within 100 mm of stationary anchor, or after Stationary reset
+        .isMinimalFrame       = false,
+        .isLd2410cFrame       = true,
+        .rawState             = 0x03u,
+        .movingEnergy         = 45u,
+        .stationaryEnergy     = 80u,
+        .movingDistanceCm     = 282u, // Within 30 mm of 2850 mm anchor
+        .stationaryDistanceCm = 95u,
+        .detectionDistanceCm  = 120u,
+    };
+    r10SingleGlitch.distanceCm = 282u;
+    r10SingleGlitch.distanceMm = 2820u;
+    tracker.Update(&r10SingleGlitch, 250000, 2950u, 180000);
+    EXPECT_EQ(tracker.GetLastMotionTimestampMs(), 125000, "Single isolated 1-frame LD2410C glitch (<100mm) does NOT reset hold timer");
+
+    //     c) At t = 305000 ms (180 s elapsed since 125000 ms), occupancy expires cleanly to OFF!
+    Ld2410sReport r10Expire = {
+        .state                = Ld2410sTargetState::Stationary,
+        .occupied             = true,
+        .motion               = false,
+        .distanceCm           = 95u,
+        .distanceMm           = 950u,
+        .isMinimalFrame       = false,
+        .isLd2410cFrame       = true,
+        .rawState             = 0x02u,
+        .movingEnergy         = 0u,
+        .stationaryEnergy     = 80u,
+        .movingDistanceCm     = 0u,
+        .stationaryDistanceCm = 95u,
+        .detectionDistanceCm  = 95u,
+    };
+    tracker.Update(&r10Expire, 305000, 2950u, 180000);
+    EXPECT_TRUE(!r10Expire.occupied, "Office occupancy expires cleanly after 180s despite low-energy/1-frame noise");
+    EXPECT_EQ(r10Expire.distanceMm, 0u, "Expired office occupancy reports 0 mm");
 }
 
 static void TestHaMqttDiscoveryAndNat64()

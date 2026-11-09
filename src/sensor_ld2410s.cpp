@@ -360,7 +360,28 @@ int SensorLd2410s::ConfigureRadarParameters()
 
     k_msleep(kInterCommandDelayMs);
 
-    // 3. Exit configuration mode (0x00FE)
+    // 3. Configure HLK-LD2410C gate sensitivities (0x0064) to suppress near-field enclosure/fan
+    //    self-noise (Gate 0) and far-wall multipath reflections beyond CONFIG_APP_RADAR_MAX_GATE:
+    const size_t sensAllLen = Ld2410sProto::BuildLd2410cWriteGateSensitivityCmd(
+        Ld2410sProto::kLd2410cAllGates, 45u, 45u, cmdBuf, sizeof(cmdBuf));
+    (void)SendCommandAndWaitAck(cmdBuf, sensAllLen, Ld2410sProto::kCmdWriteGateSensitivity, kAckTimeoutMs);
+    k_msleep(kInterCommandDelayMs);
+
+    const size_t sensGate0Len = Ld2410sProto::BuildLd2410cWriteGateSensitivityCmd(
+        0u, 60u, 60u, cmdBuf, sizeof(cmdBuf));
+    (void)SendCommandAndWaitAck(cmdBuf, sensGate0Len, Ld2410sProto::kCmdWriteGateSensitivity, kAckTimeoutMs);
+    k_msleep(kInterCommandDelayMs);
+
+    for (uint16_t g = static_cast<uint16_t>(CONFIG_APP_RADAR_MAX_GATE) + 1u;
+         g <= Ld2410sProto::kLd2410cMaxGate;
+         ++g) {
+        const size_t muteLen = Ld2410sProto::BuildLd2410cWriteGateSensitivityCmd(
+            g, 100u, 100u, cmdBuf, sizeof(cmdBuf));
+        (void)SendCommandAndWaitAck(cmdBuf, muteLen, Ld2410sProto::kCmdWriteGateSensitivity, kAckTimeoutMs);
+        k_msleep(kInterCommandDelayMs);
+    }
+
+    // 4. Exit configuration mode (0x00FE)
     const size_t exitLen = Ld2410sProto::BuildExitConfigCmd(cmdBuf, sizeof(cmdBuf));
     if (!SendCommandAndWaitAck(cmdBuf, exitLen, Ld2410sProto::kCmdExitConfig, kAckTimeoutMs)) {
         LOG_WRN("HLK-LD2410C did not ACK ExitConfig (0x00FE)");
@@ -580,7 +601,9 @@ int SensorLd2410s::SampleTargetReport(Ld2410sReport *outReport, uint32_t timeout
                     frame.report.motion     = false;
                     frame.report.distanceCm = 0u;
                     frame.report.distanceMm = 0u;
-                } else if (frame.report.motion || frame.report.state == Ld2410sTargetState::Moving) {
+                } else if ((frame.report.motion || frame.report.state == Ld2410sTargetState::Moving) &&
+                           (frame.report.movingEnergy == 0u ||
+                            frame.report.movingEnergy >= Ld2410sMotionTracker::kLd2410cMinMovingEnergy)) {
                     sawMovingInBatch = true;
                     movingDistCm     = frame.report.distanceCm;
                     movingDistMm     = frame.report.distanceMm;

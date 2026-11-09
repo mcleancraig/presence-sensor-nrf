@@ -26,6 +26,8 @@ namespace {
 
 static constexpr int32_t kMqttConnectTimeoutMs     = 4000;
 static constexpr int64_t kReconnectBackoffMs       = 2000;
+static constexpr int64_t kOnlineReassertIntervalMs = 60000;
+static constexpr int32_t kSocketIoTimeoutSec       = 3;
 
 } // namespace
 
@@ -44,12 +46,14 @@ ThreadMqttPublisher::ThreadMqttPublisher()
       mLastConnectAttemptMs(-kReconnectBackoffMs),
       mLastDiscoveryStepMs(0),
       mLastPingSentMs(0),
+      mLastOnlinePublishMs(0),
       mNextMsgId(1u),
       mPacketId(0u),
       mDiscoveryStep(0u),
       mConnected(false),
       mConnackReceived(false),
       mHasPendingPublish(false),
+      mHasValidMeasurement(false),
       mFastPollActive(false)
 {
     memcpy(mDeviceName, "Presence-0000", sizeof("Presence-0000"));
@@ -100,6 +104,9 @@ void ThreadMqttPublisher::OnMqttEvent(const struct mqtt_evt *evt)
         LOG_INF("MQTT disconnected (reason=%d)", evt->result);
         mConnected     = false;
         mDiscoveryStep = 0u;
+        if (mHasValidMeasurement) {
+            mHasPendingPublish = true;
+        }
         break;
 
     case MQTT_EVT_PUBLISH: {
@@ -299,6 +306,28 @@ bool ThreadMqttPublisher::ResolveBrokerNat64Address(struct in6_addr *outAddr6)
     return resolved;
 }
 
+void ThreadMqttPublisher::ConfigureSocketTimeouts()
+{
+    if (mClient.transport.type != MQTT_TRANSPORT_NON_SECURE ||
+        mClient.transport.tcp.sock < 0) {
+        return;
+    }
+
+    struct zsock_timeval tv{};
+    tv.tv_sec  = kSocketIoTimeoutSec;
+    tv.tv_usec = 0;
+    (void)zsock_setsockopt(mClient.transport.tcp.sock,
+                           SOL_SOCKET,
+                           SO_SNDTIMEO,
+                           &tv,
+                           sizeof(tv));
+    (void)zsock_setsockopt(mClient.transport.tcp.sock,
+                           SOL_SOCKET,
+                           SO_RCVTIMEO,
+                           &tv,
+                           sizeof(tv));
+}
+
 void ThreadMqttPublisher::DisconnectBroker()
 {
     if (mConnected) {
@@ -311,6 +340,9 @@ void ThreadMqttPublisher::DisconnectBroker()
     mConnected       = false;
     mConnackReceived = false;
     mDiscoveryStep   = 0u;
+    if (mHasValidMeasurement) {
+        mHasPendingPublish = true;
+    }
 }
 
 void ThreadMqttPublisher::PumpSocket(int32_t timeoutMs)
@@ -397,6 +429,8 @@ int ThreadMqttPublisher::ConnectToBroker()
         LOG_WRN("mqtt_connect failed (err=%d)", ret);
         return ret;
     }
+    ConfigureSocketTimeouts();
+    mLastPingSentMs = k_uptime_get();
 
     const int64_t deadlineMs = k_uptime_get() + kMqttConnectTimeoutMs;
     while (!mConnackReceived && k_uptime_get() < deadlineMs) {
@@ -479,6 +513,9 @@ int ThreadMqttPublisher::PublishNextDiscoveryStep()
                          HaMqttProto::kAvailabilityOnline,
                          strlen(HaMqttProto::kAvailabilityOnline),
                          true);
+        if (ret == 0) {
+            mLastOnlinePublishMs = k_uptime_get();
+        }
     } else {
         static constexpr HaEntityId kEntities[5] = {
             HaEntityId::Occupancy,
@@ -579,6 +616,17 @@ int ThreadMqttPublisher::TryFlushPending()
         return -ENOTCONN;
     }
 
+    if ((k_uptime_get() - mLastOnlinePublishMs) >= kOnlineReassertIntervalMs) {
+        if (PublishRaw(mAvailabilityTopic,
+                       HaMqttProto::kAvailabilityOnline,
+                       strlen(HaMqttProto::kAvailabilityOnline),
+                       true) == 0) {
+            mLastOnlinePublishMs = k_uptime_get();
+        } else {
+            return -ENOTCONN;
+        }
+    }
+
     char stateJson[HaMqttProto::kMaxStatePayloadLen] = {};
     const size_t jsonLen = HaMqttProto::FormatStatePayload(
         mPendingMeasurement, stateJson, sizeof(stateJson));
@@ -602,12 +650,17 @@ int ThreadMqttPublisher::Publish(const BthomeMeasurement &m, bool burst)
     mPendingMeasurement          = m;
     mPendingMeasurement.packetId = ++mPacketId;
     mHasPendingPublish           = true;
+    mHasValidMeasurement         = true;
 
     return TryFlushPending();
 }
 
 void ThreadMqttPublisher::ProcessBackground()
 {
+    if (!mConnected && !mOtaUpdater.IsActive()) {
+        (void)ConnectToBroker();
+    }
+
     if (mConnected) {
         PumpSocket(0);
         // When a wireless FOTA session is streaming chunks, pump consecutive TCP frames rapidly
@@ -628,17 +681,25 @@ void ThreadMqttPublisher::ProcessBackground()
         PumpSocket(0);
 
         if (mConnected) {
-            const int timeLeftMs = mqtt_keepalive_time_left(&mClient);
-            const int64_t nowMs  = k_uptime_get();
-            if (timeLeftMs >= 0 &&
-                timeLeftMs <= 15000 &&
-                (nowMs - mLastPingSentMs) >= 5000) {
-                SetFastPoll(true);
-                mLastPingSentMs = nowMs;
-                if (mqtt_ping(&mClient) != 0) {
-                    DisconnectBroker();
-                } else {
-                    PumpSocket(40);
+            if (mClient.unacked_ping >= 2) {
+                LOG_WRN("MQTT broker missed %d keepalive PINGRESPs; reconnecting",
+                        static_cast<int>(mClient.unacked_ping));
+                DisconnectBroker();
+            } else {
+                const int timeLeftMs = mqtt_keepalive_time_left(&mClient);
+                const int64_t nowMs  = k_uptime_get();
+                static constexpr int kPingEarlyThresholdMs =
+                    (CONFIG_APP_MQTT_KEEPALIVE_SEC * 1000) / 2;
+                if (timeLeftMs >= 0 &&
+                    timeLeftMs <= kPingEarlyThresholdMs &&
+                    (nowMs - mLastPingSentMs) >= 10000) {
+                    SetFastPoll(true);
+                    mLastPingSentMs = nowMs;
+                    if (mqtt_ping(&mClient) != 0) {
+                        DisconnectBroker();
+                    } else {
+                        PumpSocket(40);
+                    }
                 }
             }
         }

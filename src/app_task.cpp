@@ -17,7 +17,8 @@ static constexpr uint32_t kEvtOccupiedPoll                 = BIT(1);
 static constexpr uint32_t kEvtHeartbeat                    = BIT(2);
 static constexpr uint32_t kEvtBatterySample                = BIT(3);
 static constexpr uint32_t kEvtBurstDone                    = BIT(4);
-static constexpr uint16_t kDistanceBurstThresholdMm        = 100u;
+static constexpr uint16_t kDistanceBurstThresholdMm        = 150u;
+static constexpr int64_t  kMinDistancePublishIntervalMs    = 1500;
 static constexpr int64_t  kPostTransitionReassertWindowMs  = 15000;
 static constexpr int64_t  kPostTransitionReassertPeriodMs  = 3200;
 
@@ -25,7 +26,7 @@ static constexpr int64_t  kPostTransitionReassertPeriodMs  = 3200;
 
 AppTask::AppTask()
     : mBatteryStatus{BatteryMonitor::VOLTAGE_NOMINAL_MV, 50, BatteryChargeLevel::OK, false},
-      mLastRadarReport{Ld2410sTargetState::Unoccupied, false, false, 0, 0, true, false},
+      mLastRadarReport{Ld2410sTargetState::Unoccupied, false, false, 0, 0, true, false, 0, 0, 0, 0, 0, 0},
       mPendingEvents(ATOMIC_INIT(0)),
       mLastStateChangeMs(0),
       mLastPublishMs(0),
@@ -110,14 +111,30 @@ void AppTask::HandleOt2AndDistanceUpdate(bool forceBurst, bool forcePublish)
     mMotionTracker.Update(&report, nowMs, kMaxDistanceMm, kOccupancyHoldWindowMs);
     mLastRadarReport = report;
 
+    const Ld2410sReport rawReport = mRadar.GetLastValidReport();
+    mPublisher.UpdateRadarDiag({
+        .rawState         = rawReport.rawState,
+        .movingEnergy     = rawReport.movingEnergy,
+        .stationaryEnergy = rawReport.stationaryEnergy,
+        .movingDistCm     = rawReport.movingDistanceCm,
+        .stationaryDistCm = rawReport.stationaryDistanceCm,
+        .detectionDistCm  = rawReport.detectionDistanceCm,
+        .rxBytes          = mRadar.GetRxBytesSeen(),
+        .configured       = mRadar.IsRadarConfigured(),
+        .occupied         = report.occupied,
+        .motion           = report.motion,
+    });
+
     const bool stateChanged = (report.occupied != mLastOccupied) ||
                               (report.motion != mLastMotion);
     const bool occupancyEdge = (report.occupied != mLastOccupied);
     const uint16_t distDeltaMm = (report.distanceMm > mLastPublishedDistanceMm)
                                      ? (report.distanceMm - mLastPublishedDistanceMm)
                                      : (mLastPublishedDistanceMm - report.distanceMm);
-    const bool significantDistChange = report.occupied &&
-                                       (distDeltaMm >= kDistanceBurstThresholdMm);
+    const bool significantDistChange =
+        report.occupied &&
+        (distDeltaMm >= kDistanceBurstThresholdMm) &&
+        ((nowMs - mLastPublishMs) >= kMinDistancePublishIntervalMs);
 
     if (stateChanged) {
         mLastStateChangeMs = nowMs;
