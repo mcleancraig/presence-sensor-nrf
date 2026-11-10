@@ -270,14 +270,14 @@ def main() -> None:
     shapes8: dict[str, cq.Workplane] = {
         "aura_s_v2_base": as2_base, "aura_s_v2_lid": as2_lid, "aura_s_v2_stand": as2_stand, **dm8
     }
-    z_v2_stand = ev.V_MORTISE_V2_Z0 + ev.V_MORTISE_V2_L_Z / 2
+    z_v2_stand = ev.USBC_AURA_V2_Z
     plot(out_dir, shapes8, SectionSpec(
         "aura_v2_front_xy", (0.0, 0.0, z_v2_stand), (0, 0, 1), (0, 1),
-        f"Aura-S v2 XY section at Z={z_v2_stand:.1f} mm (64x34 mm Compact Stacked Stadium + Rear USB-C + V-Pedestal)"
+        f"Aura-S v2 XY section at Z={z_v2_stand:.1f} mm (64x34 mm Compact Stadium + Sculpted +X Flush Side USB-C + V-Pedestal)"
     ))
     plot(out_dir, shapes8, SectionSpec(
         "aura_v2_center_xz", (0.0, ev.Y_C, 0.0), (0, 1, 0), (0, 2),
-        "Aura-S v2 XZ section at Y=0.0 mm (20x20 mm HLK-LD2410S Stacked Over SuperMini + Rear Z=0 USB-C)"
+        "Aura-S v2 XZ section at Y=0.0 mm (20x20 mm HLK-LD2410S Stacked Over SuperMini + Sculpted +X Side USB-C)"
     ))
     plot(out_dir, shapes8, SectionSpec(
         "aura_v2_stack_yz", (ev.RADAR_AURA_V2_X, 0.0, 0.0), (1, 0, 0), (1, 2),
@@ -295,7 +295,7 @@ def main() -> None:
     }
     plot(out_dir, shapes9, SectionSpec(
         "aura_c_v2_center_xz", (0.0, ev.Y_C, 0.0), (0, 1, 0), (0, 2),
-        "Aura-C v2 XZ section at Y=0.0 mm (22x16 mm HLK-LD2410C Stacked Over SuperMini + Rear Z=0 USB-C)"
+        "Aura-C v2 XZ section at Y=0.0 mm (22x16 mm HLK-LD2410C Stacked Over SuperMini + Sculpted +X Side USB-C)"
     ))
     plot(out_dir, shapes9, SectionSpec(
         "aura_c_v2_stack_yz", (ev.RADAR_AURA_V2_X, 0.0, 0.0), (1, 0, 0), (1, 2),

@@ -167,17 +167,18 @@ RADAR_AURA_C_X = -25.5                  # 22x16 mm HLK-LD2410C center X (PCB X =
 
 # Model 8 ("Aura-S v2" / "aura_v2") & Model 9 ("Aura-C v2" / "aura_c_v2") — Compact Stacked Direct-Solder Monoliths
 # Stacks the direct-soldered radar (upper tier, Z = 15.9..17.1 mm) vertically above the SuperMini nRF52840
-# (lower tier, Z = 5.4..6.6 mm) alongside the hidden rear-entry (Z = 0) 13.2/13.4 mm USB-C socket, shrinking
-# length from 92.0 mm to 64.0 mm (-30%) and total height from 29.4 mm to 23.4 mm (-20%, ~45% less volume).
+# (lower tier, Z = 5.4..6.6 mm) alongside a sculpted flush-alcove +X side-entry 13.2/13.4 mm USB-C socket,
+# shrinking length from 92.0 mm to 64.0 mm (-30%) and total height from 29.4 mm to 23.4 mm (-20%, ~45% less volume).
 OUTER_L_AURA_V2 = 64.0                  # compact stacked stadium capsule length along X (down from 92.0 mm)
 INNER_L_AURA_V2 = OUTER_L_AURA_V2 - 2 * e.WALL  # 59.2 mm compact stadium cavity length (X)
 DEPTH_AURA_V2 = 18.0                    # compact stacked cavity depth along Z (down from 24.0 mm)
 H_AURA_V2 = e.FLOOR + DEPTH_AURA_V2     # 20.4 mm base height (23.4 mm total height with 3.0 mm lid)
 BOARD_V2_RAIL_H = 3.0                   # 3.0 mm under-SuperMini clearance for direct-soldered wire pads
 RADAR_V2_RAIL_H = 13.5                  # places radar PCB at Z = 15.9..17.1 mm (7.5 mm above SuperMini shield, 5.1 mm below radome)
-BOARD_AURA_V2_X = -6.5                  # lower-tier SuperMini center X (PCB X = -23.0..+10.0 mm)
+BOARD_AURA_V2_X = -8.0                  # lower-tier SuperMini center X (PCB X = -24.5..+8.5 mm; 6.0 mm clear of side USB-C stem)
 RADAR_AURA_V2_X = -10.5                 # upper-tier radar center X (LD2410S X = -20.5..-0.5 mm; LD2410C X = -21.5..+0.5 mm)
-USBC_AURA_V2_X = +17.0                  # rear-entry (Z = 0) USB-C socket center X (housing X = +11.9..+22.1 mm)
+USBC_AURA_V2_X_SEAT = OUTER_L_AURA_V2 / 2 - 3.50  # +28.50 mm recessed flat bezel seat inside +32.00 mm +X stadium nose
+USBC_AURA_V2_Z = 11.2                   # vertical center of side-entry (+X) USB-C socket (centered on 20.4 mm base wall)
 SNAP_X_AURA_V2 = 8.0                    # snap-catch X offset (+/- 8.0 mm) inside straight stadium wall
 SNAP_L_AURA_V2 = 11.0                   # snap-bead length along X for compact 64 mm stadium
 V_STAND_V2_BOT_W = 50.0                 # compact splayed footprint width for 64 mm Aura v2 stand (mm)
@@ -1242,6 +1243,127 @@ def make_aura_dummies() -> dict[str, cq.Workplane]:
 # Compact Stacked Direct-Solder Stadium Monoliths (64.0 x 34.0/32.0 x 23.4 mm — 45% Smaller Volume)
 # --------------------------------------------------------------------------------------
 
+def _add_aura_v2_side_usbc_bay(
+    base: cq.Workplane, outer_w: float, outer_r: float, extra_w: float = USBC_SOCK_EXTRA_W
+) -> cq.Workplane:
+    """Sculpted +X side-entry 3-zone USB-C clip-retention bay with flush flared architectural bezel alcove.
+
+    Because the +X end of the stadium monolith is a semicircle (R = 16.95/15.95 mm), placing a flat 16.5 mm
+    oval USB-C bezel against the apex (X = +32.0 mm) would leave unsightly side gaps along the curved nose.
+    Instead, this carves a flared architectural oval bezel alcove into the +X stadium nose with a flat vertical
+    seating plane at X = +28.50 mm (3.50 mm recessed from the +32.00 mm nose apex), so the 2.0 mm oval bezel
+    nests completely flush inside the rounded stadium silhouette with a crisp 45 deg shadow-reveal halo.
+    """
+    x_seat = USBC_AURA_V2_X_SEAT                # +28.50 mm flat bezel seating plane
+    cz = USBC_AURA_V2_Z                         # 11.20 mm vertical center
+    w_throat = USBC_SOCK_CLIP_THROAT_W          # 13.20 mm Station #4 clip-locking collar width along Y
+    w_guide = USBC_SOCK_CUT_W + extra_w         # 13.40 mm coaxial rear stem guide sleeve width along Y
+    h = USBC_SOCK_CUT_H                         # 5.80 mm height along Z
+    w_exp = USBC_SOCK_WING_W + 1.0              # 16.80 mm snap-clip expansion chamber width along Y
+
+    # 1. Outer stadium nose bulkhead (X = x_seat - 1.50 .. +32.00 mm, Z = FLOOR .. cz + 5.80 mm)
+    #    plus floor-joined under-stem support rails and side guide cheeks (X = x_seat - 14.20 .. x_seat - 1.10 mm)
+    #    clipped cleanly inside the outer stadium perimeter so there is zero long interior roof bridging.
+    outer_env = e.rrect(OUTER_L_AURA_V2 - 0.6, outer_w - 0.6, outer_r - 0.3, e.FLOOR, H_AURA_V2 - e.FLOOR - 1.0)
+    nose_len = (OUTER_L_AURA_V2 / 2) - (x_seat - 1.50)
+    nose_cx = (OUTER_L_AURA_V2 / 2 + (x_seat - 1.50)) / 2
+    nose_blk = e.box(nose_len, outer_w, (cz + 5.80) - e.FLOOR, nose_cx, Y_C, e.FLOOR)
+
+    stem_bot_z = cz - USBC_SOCK_STEM_H / 2      # 8.525 mm
+    rail_h = (stem_bot_z - 0.175) - e.FLOOR     # 5.95 mm
+    cheek_h = (cz + h / 2 + 0.40) - e.FLOOR     # 12.10 mm (Z = 2.40..14.50 mm open-top U-channel behind collar)
+    guide_len = 14.20 - USBC_SOCK_PANEL_T       # 13.10 mm
+    guide_cx = (x_seat - USBC_SOCK_PANEL_T) - guide_len / 2
+    for sy in (-1, 1):
+        nose_blk = nose_blk.union(e.box(guide_len, 2.2, rail_h, guide_cx, Y_C + sy * 3.8, e.FLOOR))
+        cheek_in_y = w_throat / 2 - 0.1         # 6.50 mm
+        cheek_out_y = outer_w / 2               # clipped by outer_env
+        cheek_w = cheek_out_y - cheek_in_y
+        nose_blk = nose_blk.union(
+            e.box(guide_len + 0.4, cheek_w, cheek_h, guide_cx, Y_C + sy * (cheek_in_y + cheek_w / 2), e.FLOOR)
+        )
+    base = base.union(nose_blk.intersect(outer_env))
+
+    # 2. Sculpted Flush Architectural Bezel Alcove (X = +28.50..+32.50 mm):
+    #    17.10 x 11.00 mm oval pocket at X = +28.50..+30.30 mm flaring outward at 45 deg to 19.50 x 13.40 mm at X = +32.00 mm
+    alcove_w0 = USBC_SOCK_BEZEL_W + 0.60       # 17.10 mm
+    alcove_h0 = USBC_SOCK_BEZEL_H + 0.60       # 11.00 mm
+    alcove_seat = (
+        cq.Workplane("YZ")
+        .workplane(offset=x_seat)
+        .center(Y_C, cz)
+        .rect(alcove_w0, alcove_h0)
+        .extrude(4.0)
+        .edges("|X")
+        .fillet(4.9)
+    )
+    alcove_flare = (
+        cq.Workplane("YZ")
+        .workplane(offset=x_seat + 1.60)
+        .center(Y_C, cz)
+        .rect(alcove_w0 + 2.40, alcove_h0 + 2.40)
+        .extrude(2.4)
+        .edges("|X")
+        .fillet(6.1)
+        .faces("<X")
+        .edges()
+        .chamfer(1.15)
+    )
+    base = base.cut(alcove_seat.union(alcove_flare))
+
+    # 3. Zone 1A (d = 0.00..0.45 mm from x_seat): Entry lead-in mouth (13.60 x 6.00 mm)
+    lead_in = (
+        cq.Workplane("YZ")
+        .workplane(offset=x_seat - 0.45)
+        .center(Y_C, cz)
+        .rect(w_guide + 0.20, h + 0.20)
+        .extrude(0.60)
+        .edges("|X")
+        .fillet(0.5)
+    )
+    # 4. Zone 1B (d = 0.45..1.10 mm from x_seat): Station #4 13.20 x 5.80 mm clip-locking collar
+    throat = (
+        cq.Workplane("YZ")
+        .workplane(offset=x_seat - USBC_SOCK_PANEL_T - 0.10)
+        .center(Y_C, cz)
+        .rect(w_throat, h)
+        .extrude(USBC_SOCK_PANEL_T + 0.30)
+        .edges("|X")
+        .fillet(0.5)
+    )
+    # 5. Zone 2 (d = 1.10..5.80 mm from x_seat): 16.80 x 5.80 mm snap-clip expansion chamber
+    pocket_len = USBC_SOCK_POCKET_END - USBC_SOCK_PANEL_T
+    wing_chamber = e.box(
+        pocket_len,
+        w_exp,
+        h,
+        x_seat - USBC_SOCK_PANEL_T - pocket_len / 2,
+        Y_C,
+        cz - h / 2,
+    )
+    # 6. Support-free 45 deg transition (d = 5.80..7.00 mm) from 16.80 mm chamber to 13.40 mm guide sleeve
+    taper = (
+        cq.Workplane("YZ")
+        .workplane(offset=x_seat - USBC_SOCK_POCKET_END + 0.05)
+        .center(Y_C, cz)
+        .rect(w_exp, h)
+        .workplane(offset=-1.20)
+        .rect(w_guide, h)
+        .loft()
+    )
+    # 7. Zone 3 (d = 5.80..14.60 mm, X = +14.90..+23.70 mm): 13.40 x 5.80 mm coaxial rear stem guide sleeve
+    guide = (
+        cq.Workplane("YZ")
+        .workplane(offset=x_seat - 14.60)
+        .center(Y_C, cz)
+        .rect(w_guide, h)
+        .extrude(14.60 - USBC_SOCK_POCKET_END + 0.20)
+        .edges("|X")
+        .fillet(0.5)
+    )
+    return base.cut(lead_in).cut(throat).cut(wing_chamber).cut(taper).cut(guide)
+
+
 def _add_aura_v2_board_cradle(base: cq.Workplane, inner_w: float) -> cq.Workplane:
     """Lower-tier cradle for direct-soldered SuperMini nRF52840 at BOARD_AURA_V2_X (Z = 5.4..6.6 mm)."""
     z_top = e.FLOOR + BOARD_V2_RAIL_H + e.BOARD_T           # 6.60 mm
@@ -1391,7 +1513,7 @@ def make_aura_s_v2_base() -> cq.Workplane:
     base = _add_v_stand_mortise(
         base, OUTER_W_AURA, mortise_z0=V_MORTISE_V2_Z0, mortise_l_z=V_MORTISE_V2_L_Z, y_boss_in=-10.35
     )
-    return _add_aura_rear_usbc_bay(base, extra_w=USBC_SOCK_EXTRA_W, cx=USBC_AURA_V2_X)
+    return _add_aura_v2_side_usbc_bay(base, outer_w=OUTER_W_AURA, outer_r=OUTER_R_AURA, extra_w=USBC_SOCK_EXTRA_W)
 
 
 def make_aura_s_v2_lid() -> cq.Workplane:
@@ -1481,7 +1603,7 @@ def make_aura_c_v2_base() -> cq.Workplane:
     base = _add_v_stand_mortise(
         base, OUTER_W_AURA_C, mortise_z0=V_MORTISE_V2_Z0, mortise_l_z=V_MORTISE_V2_L_Z, y_boss_in=-10.35
     )
-    return _add_aura_rear_usbc_bay(base, extra_w=USBC_SOCK_EXTRA_W, cx=USBC_AURA_V2_X)
+    return _add_aura_v2_side_usbc_bay(base, outer_w=OUTER_W_AURA_C, outer_r=OUTER_R_AURA_C, extra_w=USBC_SOCK_EXTRA_W)
 
 
 def make_aura_c_v2_lid() -> cq.Workplane:
@@ -1572,28 +1694,51 @@ def make_aura_s_v2_dummies() -> dict[str, cq.Workplane]:
     # Direct-soldered wire harness dropping from radar +X solder pads to SuperMini pads below
     direct_wires = e.box(2.4, 8.0, 5.8, x_rad_right - 1.2, Y_C + 1.5, z_brd_top + 2.2)
 
+    x_seat = USBC_AURA_V2_X_SEAT
+    cz = USBC_AURA_V2_Z
     bezel = (
-        cq.Workplane("XY")
-        .workplane(offset=-USBC_SOCK_BEZEL_T - 0.05)
-        .center(USBC_AURA_V2_X, Y_C)
-        .rect(USBC_SOCK_BEZEL_H, USBC_SOCK_BEZEL_W)
+        cq.Workplane("YZ")
+        .workplane(offset=x_seat + 0.05)
+        .center(Y_C, cz)
+        .rect(USBC_SOCK_BEZEL_W, USBC_SOCK_BEZEL_H)
         .extrude(USBC_SOCK_BEZEL_T)
-        .edges("|Z")
+        .edges("|X")
         .fillet(4.8)
     )
     waist = (
-        e.box(USBC_SOCK_STEM_H, USBC_SOCK_WAIST_W, 1.25, USBC_AURA_V2_X, Y_C, 0.0)
-        .edges("|Z")
+        e.box(
+            1.25,
+            USBC_SOCK_WAIST_W,
+            USBC_SOCK_STEM_H,
+            x_seat - 1.25 / 2,
+            Y_C,
+            cz - USBC_SOCK_STEM_H / 2,
+        )
+        .edges("|X")
         .fillet(0.6)
     )
     stem = (
-        e.box(USBC_SOCK_STEM_H, USBC_SOCK_STEM_W, USBC_SOCK_STEM_L - 1.25, USBC_AURA_V2_X, Y_C, 1.25)
-        .edges("|Z")
+        e.box(
+            USBC_SOCK_STEM_L - 1.25,
+            USBC_SOCK_STEM_W,
+            USBC_SOCK_STEM_H,
+            x_seat - 1.25 - (USBC_SOCK_STEM_L - 1.25) / 2,
+            Y_C,
+            cz - USBC_SOCK_STEM_H / 2,
+        )
+        .edges("|X")
         .fillet(0.6)
     )
-    wings = e.box(4.6, USBC_SOCK_WING_W, 4.25, USBC_AURA_V2_X, Y_C, 1.25)
+    wings = e.box(
+        4.25,
+        USBC_SOCK_WING_W,
+        4.6,
+        x_seat - 1.25 - 4.25 / 2,
+        Y_C,
+        cz - 2.3,
+    )
     usb_c_socket = bezel.union(waist).union(stem).union(wings)
-    usb_c_plug = e.box(6.0, 11.4, 14.0, USBC_AURA_V2_X, Y_C, -USBC_SOCK_BEZEL_T - 14.1)
+    usb_c_plug = e.box(14.0, 11.4, 6.0, x_seat + USBC_SOCK_BEZEL_T + 7.1, Y_C, cz - 3.0)
 
     return {
         "board": board,
