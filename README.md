@@ -1,61 +1,64 @@
 # presence-sensor-nrf
 
-Ultra-low-power 24 GHz mmWave Human Presence, Motion, Distance, and Battery Sensor for Home Assistant over **OpenThread 1.3 Sleepy End Device (SED) + NAT64 + Home Assistant MQTT Auto-Discovery** (and host-tested BTHome v2 codec), built on the SuperMini nRF52840 (`nice!nano v2` compatible) and the Hi-Link **HLK-LD2410S** (`20 × 20 mm` battery-powered radar) or **HLK-LD2410C** (`22 × 16 mm` constant USB-C powered radar).
+24 GHz mmWave Human Presence, Motion, Distance, and Battery Sensor for **Home Assistant** over **OpenThread 1.3 + RFC 6052 NAT64 + Home Assistant MQTT Auto-Discovery** (plus a host-tested BTHome v2 BLE codec and wireless MQTT FOTA updater), built on the **SuperMini nRF52840** (`nice!nano v2` compatible) and the Hi-Link **HLK-LD2410S** (`20 × 20 mm`, `3.3 V` ultra-low-power radar) or **HLK-LD2410C** (`22 × 16 mm`, `5 V` continuous-power radar).
 
-> **Enclosures:** Four 3D-printable Bambu A1 enclosure models (STEP for Fusion + STL) in [`enclosure/`](enclosure/README.md) — including **Model 4 (`ld2410c_base.stl` / `ld2410c_lid.stl`)** tailored for the `22 × 16 mm` HLK-LD2410C with a constant USB-C power pass-through port — see [Section 8](#8-3d-printable-enclosures-4-bambu-a1-models).
+> **3D-Printable Enclosures (9 Models + Fit-Test Gauge):** Parametric CadQuery generators in [`enclosure/`](enclosure/README.md) produce **9 support-free Bambu Lab A1 enclosures** (`0.000 mm³` boolean interference, `1.20 mm` blind RF radome with `5.10 mm` antenna air gap) — covering sealed 18650 bathroom cases (**Models 1–3**), sleek desktop USB-C cases (**Models 4–5**), the flagship **`Aura v1` (`Aura-S v1` / `Aura-C v1`)** stadium monoliths with hidden rear USB-C (**Models 6–7**), and the ultra-compact stacked direct-solder **`Aura v2` (`Aura-S v2` / `Aura-C v2`)** monoliths with a sculpted flush-alcove side USB-C port (**Models 8–9**). See [Section 7](#7-3d-printable-enclosures-9-bambu-lab-a1-models--usb-c-fit-test-gauge).
 >
-> **Bring-up notes:** see [`doc/bringup-notes.md`](doc/bringup-notes.md) for flash offset requirements (`0x1000` without SoftDevice), HLK-LD2410S continuous power vs. UART sleep architecture, and debugging over USB CDC ACM.
+> **Bring-up notes:** See [`doc/bringup-notes.md`](doc/bringup-notes.md) for flash offset requirements (`0x1000` without SoftDevice), `HLK-LD2410S` vs `HLK-LD2410C` power/UART architecture, and live USB CDC ACM debugging.
 
 ---
 
-## 1. Hardware Architecture
+## 1. Hardware Architecture & Supported Configurations
 
-- **Microcontroller**: SuperMini nRF52840 (pinout and Adafruit UF2 bootloader compatible with `nice!nano v2`).
-- **mmWave Radar (2 Supported Variants)**:
-  - **Hi-Link HLK-LD2410S (Default, `CONFIG_APP_RADAR_LD2410S=y`)**: 24 GHz FMCW battery-powered human presence & micro-motion radar (`3.0 V - 3.6 V` regulated rail, ~`58 - 100 µA` average current in low-speed 1 Hz sleep mode; **`20.0 × 20.0 × 1.2 mm` square PCB** with `R = 2.0 mm` rounded corners, `115200` baud UART, `0.70 m` gate spacing, and an asymmetric **`2.54 mm` (`0.100"`) pitch 5-pin `J2` header**).
-  - **Hi-Link HLK-LD2410C (`ld2410c.conf`, `CONFIG_APP_RADAR_LD2410C=y`)**: 24 GHz FMCW continuous-power human presence radar (`VCC` powered from `RAW`/`B+` at `~4.1 V` with the underside **`BI-PROG` (`BOOST`) jumper bridged** for `300 mA`, or from `~4.7–5.0 V` USB `VBUS` at diode `D1` / `LTH7R` Pin 4; **`22.0 × 16.0 × 1.2 mm` rectangular PCB** with `R = 1.2 mm` rounded corners, `256000` baud UART via `NRF_UARTE_BAUDRATE_250000` with automatic `115200` baud & TX/RX pin-swap fallback, `0.75 m` gate spacing, and a centered **`2.54 mm` (`0.100"`) pitch 5-pin header** `TX, RX, OUT, GND, VCC`).
-- **Power Source**: Single Li-ion cell (`3.0 V - 4.2 V`) feeding the SuperMini `B+`/`B-` pads (`VDDH`).
-- **Continuous Radar Power (`P0.13` Switched VCC)**: Unlike one-shot I2C sensors, the HLK-LD2410S executes an internal 1 Hz / 8 Hz FMCW chirp state machine and maintains adaptive environmental noise baselines. Its `3V3` input (`J2 Pin 1`) is powered from the SuperMini's switched `VCC` header pin (`P0.13` HIGH continuously during normal operation) so the onboard 3.3 V LDO regulates the raw cell voltage (`3.0 V - 4.2 V`) down to a clean `3.3 V` within the radar's `3.6 V` absolute maximum limit.
-- **Interrupt-Driven Wake & UARTE0 Runtime Suspend**:
-  - `P0.17` (`017` / `D2`, `OT2` GPIO interrupt, `GPIO_INT_EDGE_BOTH`) wakes the nRF52840 from `< 3 µA` System ON Idle immediately (`< 5 ms` instant BLE broadcast) when a person enters or leaves the bathroom.
-  - `uart0` (`115200` baud, 8N1 on `P0.08` / `008` / `D0` RX and `P0.06` / `006` / `D1` TX) uses interrupt-driven RX (`CONFIG_UART_INTERRUPT_DRIVEN=y`) with a lock-free ISR ring buffer and is suspended via `pm_device_action_run(uart_dev, PM_DEVICE_ACTION_SUSPEND)` whenever idle, releasing the nRF52840 64 MHz HFCLK and EasyDMA (~`500 µA` savings) and resuming only on `OT2` edges or brief sub-second radar polls (`400 ms` via `CONFIG_APP_RADAR_POLL_INTERVAL_MS`, averaging only `~62 ms` wake time per `8.0 Hz` radar frame).
-- **Low-Voltage Cutoff**: At `<= 3.0 V` (confirmed across 8 averaged readings over 2 s in `BatteryMonitor::ReadBatteryStatus()`), `P0.13` (`VCC`) is driven LOW to disconnect the HLK-LD2410S rail and the nRF52840 enters System OFF (`sys_poweroff()`).
+The firmware supports two radar modules and two power modes out of the box:
 
-### Pinout, Header Geometry & Enclosure Orientation
+| Feature / Parameter | **HLK-LD2410S (Default Build)** | **HLK-LD2410C (`ld2410c.conf` Overlay)** |
+| :--- | :--- | :--- |
+| **Kconfig Selection** | `CONFIG_APP_RADAR_LD2410S=y` (default in `Kconfig`) | `CONFIG_APP_RADAR_LD2410C=y` (`-DEXTRA_CONF_FILE="local.conf;ld2410c.conf"`) |
+| **PCB Dimensions & Header** | **`20.0 × 20.0 × 1.2 mm`** square PCB (`R = 2.0 mm` corners); asymmetric 5-pin `2.54 mm` `J2` header (`3V3, GND, OT1, RX, OT2`) along `+X` edge | **`22.0 × 16.0 × 1.2 mm`** rectangular PCB (`R = 1.2 mm` corners); centered 5-pin `2.54 mm` header (`VCC, GND, OUT, RX, TX`) along `16.0 mm` `+X` edge |
+| **Radar Supply Voltage** | **`3.0 – 3.6 V` regulated ONLY** (`~58 – 120 µA` in 1 Hz/8 Hz low-power mode). Powered from SuperMini switched **`3.3 V` `VCC` pin** (`P0.13` HIGH). **Never connect to `5 V` or raw `4.2 V` Li-ion!** | **`5.0 V` (`4.0 – 12.0 V` input to onboard SOT-23-5 `3.3 V` LDO)**, `~70 – 80 mA` avg (`120 – 200 mA` chirp peaks). Powered directly from **`5 V` USB-C socket `+`**, SuperMini **`D1` (`VBUS`)**, or **`RAW`/`B+` (`~4.1 V` with underside `BI-PROG` bridged for `300 mA`)**. |
+| **Supported Power Sources** | **18650 Li-ion cell** (Models 1–3) **OR** **5 V USB-C** (Models 5, 6 `Aura-S v1`, 8 `Aura-S v2`) | **5 V USB-C** (Models 4, 7 `Aura-C v1`, 9 `Aura-C v2`) |
+| **UART Baud Rate & Protocol** | `115200` baud 8N1; commands `0x0070` / `0x007A`; 5-byte minimal (`6E [state] [dist_lo] [dist_hi] 62`) & standard (`F4..F5`) frames | `256000` baud 8N1 (`NRF_UARTE_BAUDRATE_250000` with automatic `115200` baud & TX/RX pin-swap fallback); command `0x0060`; standard/engineering (`F4 F3 F2 F1 .. F8 F7 F6 F5`) frames |
+| **Range Gate Spacing & Defaults** | **`0.70 m` / gate** — Gate `3` (`2.10 m`), `2100 mm` max distance clamp, `30 s` hold time (tuned for `~3 m³` bathroom) | **`0.75 m` / gate** — Gate `3` (`0`-indexed Gates `0..3` = `0.00..3.00 m`), `2950 mm` max distance clamp, `180 s` (`3 min`) hold time (tuned for seated office desk) |
+| **OpenThread Role & Polling** | **Sleepy End Device (SED)** on battery (`5000 ms` sleep poll / `80 ms` active fast-poll, `400 ms` UART frame drain); or **Minimal End Device (MED, `RxOnWhenIdle=true`)** when `CONFIG_APP_ALWAYS_USB_POWERED=y` | **Minimal End Device (MED, `RxOnWhenIdle=true`)** (`CONFIG_APP_ALWAYS_USB_POWERED=y`, `CONFIG_OPENTHREAD_MTD_SED=n`, `100 ms` / `10 Hz` real-time UART processing, zero parent-poll latency, wireless MQTT FOTA enabled) |
 
-The HLK-LD2410S `J2` 5-pin header (`3V3`, `GND`, `OT1`, `RX`, `OT2`) uses a standard **`2.54 mm` (`0.100"`) pitch** and is asymmetrically positioned along the `+X` PCB edge (`Pin 5 OT2` round pad at the corner `1.62 mm` from the top `+Y` edge down to `Pin 1 3V3` **square pad** near the middle of the PCB at `11.78 mm` from the top `+Y` edge, with hole centers `1.47 mm` inward from the `+X` edge):
+---
 
-| HLK-LD2410S `J2` Pin (`2.54 mm` 5-pin) | Pad Shape & `Y_from_top` (`+Y` Edge) | SuperMini Silkscreen / Pin | nRF52840 Port.Pin | Direction | Function / Connection |
+## 2. Single-Source Master Wiring Table (`HLK-LD2410S` & `HLK-LD2410C` | Battery & USB-C Powered)
+
+Use this single table for **all** hardware combinations (**`HLK-LD2410S`** vs **`HLK-LD2410C`**, and **18650 Battery-Powered** vs **USB-C Powered**, whether using a 5-pin DuPont connector or direct-soldering in `Aura v2`):
+
+| Signal / Function | SuperMini nRF52840 Pin / Pad (`GPIO`) | `HLK-LD2410S` (`20 × 20 mm`, `3.3 V` Radar) `J2` Pin & Pad Geometry | `HLK-LD2410C` (`22 × 16 mm`, `5 V` Radar) Header Pin | **Battery-Powered Wiring** (18650 Cell — Models 1, 2, 3) | **USB-C Powered Wiring** (2-Pin Panel Socket `1005008559159734` — Models 4–9) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Pin 1: `3V3` (`3.0–3.6 V`)** | **Square pad**, `11.78 mm` (near middle) | `VCC` (switched) | Controlled by `P0.13` | Power Out | Continuous regulated 3.3 V supply (`P0.13` held HIGH during run, LOW on `<= 3.0 V` cutoff) |
-| **Pin 2: `GND`** | Round pad, `9.24 mm` | `GND` | `GND` | Ground | Common ground with SuperMini and battery `B-` |
-| **Pin 3: `OT1` (UART TX)** | Round pad, `6.70 mm` | `008` (`D0`) | `P0.08` | Radar -> MCU | `uart0` RX (`115200` baud, 8N1; `low-power-enable` in sleep) |
-| **Pin 4: `RX` (UART RX)** | Round pad, `4.16 mm` | `006` (`D1`) | `P0.06` | MCU -> Radar | `uart0` TX (`115200` baud, 8N1; `low-power-enable` in sleep) |
-| **Pin 5: `OT2` (Status IO)** | **Round pad**, `1.62 mm` (at corner) | `017` (`D2`) | `P0.17` | Radar -> MCU | Digital presence output (`HIGH` = occupied, `LOW` = clear; `GPIO_INT_EDGE_BOTH` wake) |
-| **Battery `+` / `-`** | — | `B+` / `B-` | `VDDH` / `GND` | Power In | Raw Li-ion cell (`3.0 V - 4.2 V`), measured internally via `NRF_SAADC_VDDHDIV5` (`1/2` gain) |
-| **Status LED (Red)** | — | On-board Red LED | `P0.15` | Internal | `500 ms` boot flash; strictly OFF (`0 V`) thereafter |
-| **Charger LED (Blue)** | — | On-board Blue LED | `LTH7R` / `TP4054` `STAT` | Hardware | Li-ion charger status (not a GPIO; lights on USB when `B+` is open and `VCC` draws load) |
+| **1. Radar Power (`VCC` / `3V3`)** | • **`LD2410S`**: **`VCC`** (`3.3 V` switched by `P0.13`)<br>• **`LD2410C`**: **Panel USB-C `+` (`5 V`)**, OR **`RAW`/`B+`** (bridge underside `BI-PROG`), OR **`D1` (`VBUS`)** | **`J2 Pin 1: 3V3`**<br>**Square pad**, `11.78 mm` from `+Y` top edge (near middle of `+X` edge).<br>⚠️ **`3.0–3.6 V` MAX!** | **`Pin 1: VCC`**<br>**Square pad** at end of 5-pin row.<br>Requires **`4.0–12.0 V` (`>= 200 mA` peak)** for onboard `3.3 V` LDO. | **`LD2410S` only:**<br>Wire `LD2410S J2 Pin 1 (3V3)` → SuperMini **`VCC`** (`3.3 V` LDO output; automatically cut off via `P0.13` LOW at `<= 3.0 V` battery cutoff). | • **`LD2410S` (Models 5, 6, 8)**: Wire `LD2410S J2 Pin 1 (3V3)` → SuperMini **`VCC` (`3.3 V`)**. *(Never wire `LD2410S` directly to `5 V`!)*<br>• **`LD2410C` (Models 4, 7, 9)**: Wire `LD2410C Pin 1 (VCC)` → **Panel USB-C `+` (`5 V` Red wire)** directly in parallel with SuperMini power input (recommended), OR to SuperMini **`RAW`/`B+`** (with underside `BI-PROG` bridged for `300 mA`), OR to SuperMini **`D1` (`VBUS`)**. |
+| **2. Radar Ground (`GND`)** | **`GND`** (through-hole pin or `B-` pad) | **`J2 Pin 2: GND`**<br>Round pad, `9.24 mm` from `+Y` top edge (adjacent to `Pin 1 3V3`). | **`Pin 2: GND`**<br>Round pad adjacent to `Pin 1 VCC`. | Wire Radar `GND` → SuperMini **`GND`** (shared with `18650 -` plate). | Wire Radar `GND` → SuperMini **`GND`** (shared with Panel USB-C `-` Black wire). |
+| **3. Radar UART TX → MCU RX** | **`008`** (`D0` / **`P0.08`**, `uart0` RX) | **`J2 Pin 3: OT1`**<br>Round pad, `6.70 mm` from `+Y` top edge (`115200` baud). | **`Pin 5: TX`**<br>Round pad at far end of 5-pin row (`256000` baud; auto-swaps if crossed). | Wire `LD2410S J2 Pin 3 (OT1)` → SuperMini **`008` (`P0.08`)**. | • **`LD2410S`**: Wire `J2 Pin 3 (OT1)` → **`008` (`P0.08`)**.<br>• **`LD2410C`**: Wire `Pin 5 (TX)` → **`008` (`P0.08`)**. |
+| **4. MCU UART TX → Radar RX** | **`006`** (`D1` / **`P0.06`**, `uart0` TX) | **`J2 Pin 4: RX`**<br>Round pad, `4.16 mm` from `+Y` top edge (`115200` baud). | **`Pin 4: RX`**<br>Round pad (`256000` baud; auto-swaps if crossed). | Wire `LD2410S J2 Pin 4 (RX)` → SuperMini **`006` (`P0.06`)**. | • **`LD2410S`**: Wire `J2 Pin 4 (RX)` → **`006` (`P0.06`)**.<br>• **`LD2410C`**: Wire `Pin 4 (RX)` → **`006` (`P0.06`)**. |
+| **5. Radar Wake / Presence Out** | **`017`** (`D2` / **`P0.17`**, `GPIO_INT_EDGE_BOTH`) | **`J2 Pin 5: OT2`**<br>Round pad at `+Y` corner, `1.62 mm` from `+Y` top edge. | **`Pin 3: OUT`**<br>Round pad in center of 5-pin row. | Wire `LD2410S J2 Pin 5 (OT2)` → SuperMini **`017` (`P0.17`)** for instant `< 5 ms` wake from System ON Idle. | • **`LD2410S`**: Wire `J2 Pin 5 (OT2)` → **`017` (`P0.17`)**.<br>• **`LD2410C`**: Wire `Pin 3 (OUT)` → **`017` (`P0.17`)** *(optional on 4-wire hookups)*. |
+| **6. Primary Power Input (`18650` or `USB-C`)** | **`B+` / `RAW`** (`VDDH` / `LTH7R BAT`) or **`D1` (`VBUS`)**, and **`B-` / `GND`** | *(Supplied via Row 1 & Row 2)* | *(Supplied via Row 1 & Row 2)* | • **`18650 +` button contact plate** → SuperMini **`B+`** pad (measured internally via SAADC `VDDH/5`; recharges via SuperMini USB-C port in Model 3).<br>• **`18650 -` spring contact plate** → SuperMini **`B-` (`GND`)** pad. | • **Panel USB-C `+` (`5 V` Red wire)** → SuperMini **`RAW` or `B+`** pad (or `D1` `VBUS` pad; on `LD2410C` builds, split `+5 V` directly to both SuperMini `RAW`/`B+` and `LD2410C Pin 1 VCC`).<br>• **Panel USB-C `-` (`GND` Black wire)** → SuperMini **`GND` or `B-`** pad. |
+| **7. Optional Decoupling Cap** | — | Across adjacent **`J2 Pin 1 (3V3)` & `Pin 2 (GND)`** (`2.54 mm` spacing) | Across adjacent **`Pin 1 (VCC)` & `Pin 2 (GND)`** (`2.54 mm` spacing) | Optional `10–47 µF` ceramic/electrolytic capacitor on `-Z` header pins smooths 24 GHz FMCW chirp current spikes. | Optional `10–47 µF` capacitor across radar `Pin 1` & `Pin 2`. |
+| **8. On-Board LEDs** | • Red: **`P0.15`**<br>• Blue: **`LTH7R STAT`** | — | — | Red LED flashes `500 ms` at boot, then stays strictly OFF (`0 V`). | Blue charger LED is hardwired to `LTH7R` charger `STAT` (not a GPIO). |
 
-- **Enclosure Orientation (`20.0 × 20.0 × 1.2 mm` PCB, `R = 2.0 mm` corners)**:
-  - **Antenna Side (`TOP层` -> `+Z` UP)**: The front face containing the two diagonally opposite 24 GHz patch antennas and `ICL1112` transceiver IC faces **UP (`+Z`)** directly toward the lid's **`22 × 22 × 1.2 mm`** blind RF radome window.
-  - **Component / Header Side (`Bottom层` -> `-Z` DOWN, `J2` -> `+X`)**: The underside containing the `PY32F030` MCU, `YXC` crystal, and `-Z` 5-pin `J2` header faces **DOWN (`-Z`)** with **`19.5 mm`** of under-board vertical clearance, and the `J2` 5-pin header edge faces **`+X` directly toward the SuperMini nRF52840** for short, unpinched cable routing.
-  - **Optional Decoupling Capacitor (`10–47 µF`)**: Because `Pin 1 (3V3)` and `Pin 2 (GND)` on `J2` are immediately adjacent (`2.54 mm` pitch), an optional `10–47 µF` capacitor can be soldered directly across Pins 1 and 2 on the `-Z` underside to smooth 24 GHz chirp current spikes.
-- **HLK-LD2410C Pinout, Power Rail (`RAW`/`B+` `4.1 V` vs `VBUS` `5 V`) & Enclosure Orientation (`22.0 × 16.0 × 1.2 mm` PCB, `ld2410c.conf`)**:
-  - The HLK-LD2410C 5-pin `2.54 mm` header (`VCC`, `GND`, `OUT`, `RX`, `TX`) sits centered along the `16.0 mm` `+X` edge facing the SuperMini nRF52840 (`GND` -> `GND`, `TX` -> `P0.08` / `008`, `RX` -> `P0.06` / `006`, `OUT` -> `P0.17` / `017`).
-  - **Why `RAW` and `B+` Both Measure `4.1 V` on the SuperMini nRF52840**: On the SuperMini nRF52840 schematic, the top-right through-hole `RAW` pin and the front `B+` pad are **physically tied to the same copper net (`VBAT`)**, which is the `BAT` output (`Pin 3`) of the onboard **`LTH7R` (`TP4054`/`LP4057`) `4.2 V` Li-ion charger IC** — **not** raw USB `5 V` (`VBUS`). By default, `LTH7R` limits current on `RAW`/`B+` to **`100 mA`**, whereas the HLK-LD2410C draws `~70–80 mA` average with `120–200 mA` chirp peaks. Power `VCC` on the HLK-LD2410C using either:
-    1. **`RAW` or `B+` (`~4.1 V`) with the Underside `BI-PROG` Jumper Bridged (Easiest Through-Hole Wiring)**: On the underside of the `nice!nano` clone (next to the `VDD / DIO / CLK / GND` SWD pads), solder a bridge across the 2-pad **`BI-PROG`** (`Battery I-PROG`, labeled `BOOST` on genuine `nice!nano v2`) jumper to raise the `LTH7R` current limit from `100 mA` to **`300 mA`**. Because the HLK-LD2410C uses an onboard `3.3 V` LDO regulator (`SOT-23-5`) to step `VCC` down to `3.3 V` internally, `4.1 V` at `300 mA` provides `~0.8 V` of LDO headroom (add an optional `10–47 µF` capacitor across `VCC` and `GND`).
-    2. **Direct `~4.7–5.0 V` USB `VBUS` Tap at Diode `D1` / `LTH7R Pin 4`**: For a true `5 V` rail that bypasses the `LTH7R` charger IC completely, solder the HLK-LD2410C `VCC` wire to the USB `VBUS` Schottky diode **`D1`** (or **`LTH7R` Pin 4** / its adjacent input capacitor pad) directly behind the USB-C receptacle on the top of the SuperMini PCB.
-  - Mount in **Model 4 (`ld2410c_base.stl` + `ld2410c_lid.stl`)** with the 24 GHz patch antennas facing **UP (`+Z`)** under the `24 × 18 × 1.2 mm` blind RF radome pocket and the 5-pin header facing **DOWN (`-Z`)** on the `+X` edge toward the SuperMini.
+### Important Hardware Notes
+
+1. **Why `RAW` and `B+` Measure `~4.1 V` on USB Power (`LTH7R` Charger Current Limit)**:
+   - On the SuperMini nRF52840 schematic, the top-right through-hole **`RAW`** pin and the front **`B+`** pad are physically tied to the same copper net (`VBAT`), which is the `BAT` output (`Pin 3`) of the onboard **`LTH7R` (`TP4054`/`LP4057`) `4.2 V` Li-ion charger IC** — **not** direct `5 V` USB `VBUS`.
+   - When using the **2-Pin Panel-Mount USB-C Socket (`1005008559159734`, Models 4–9)** with the **`HLK-LD2410C`**:
+     - **Best Practice (Direct Parallel `5 V` Split)**: Splice or solder the Panel USB-C Socket **`+` (`5 V` Red)** wire directly to **both** the SuperMini (`RAW` or `B+` pad) **and** `HLK-LD2410C Pin 1 (VCC)`. That way, the radar receives full `5.0 V` directly from the USB-C socket and its `120–200 mA` chirp peaks bypass the SuperMini's `LTH7R` charger IC completely.
+     - **If Powering `HLK-LD2410C` from SuperMini USB-C via `RAW`/`B+`**: Bridge the 2-pad **`BI-PROG`** (`BOOST`) solder jumper on the underside of the SuperMini (next to the `VDD / DIO / CLK / GND` SWD pads) to raise the `LTH7R` current limit from `100 mA` to **`300 mA`**, or tap `~4.8 V` `VBUS` directly at Schottky diode **`D1`** / **`LTH7R Pin 4`** behind the SuperMini's USB-C port.
+2. **Mechanical Radar Orientation inside All Enclosures (Models 1–9)**:
+   - **Antenna Side (`TOP层` → `+Z` UP toward Lid)**: The face with the gold 24 GHz patch antennas faces **UP (`+Z`)** directly beneath the lid's **`1.20 mm` blind RF radome window** (`22 × 22 mm` for `HLK-LD2410S`, `24 × 18 mm` for `HLK-LD2410C`), maintaining an exact **`5.10 mm` (`~0.41 λ₀`) antenna air gap**.
+   - **Component & Header Side (`Bottom层` → `-Z` DOWN, 5-Pin Header → `+X`)**: The underside with the MCU, crystal, and 5-pin header/pads faces **DOWN (`-Z`)**, with the 5-pin header edge on **`+X`** facing the SuperMini nRF52840.
 
 ---
 
-## 2. OpenThread 1.3 SED + NAT64 + Home Assistant MQTT Auto-Discovery
+## 3. OpenThread 1.3 + NAT64 + Home Assistant MQTT Auto-Discovery & Wireless FOTA
 
-The sensor operates as an **OpenThread 1.3 Minimal Thread Device (MTD) / Sleepy End Device (SED)** at **`+8 dBm` (`6.3 mW`) IEEE 802.15.4 transmit power** (`CONFIG_OPENTHREAD_DEFAULT_TX_POWER=8`). It attaches to your OpenThread Border Router (OTBR), synthesizes the IPv6 address of your Home Assistant Mosquitto MQTT broker from the OTBR's `/96` **RFC 6052 NAT64 prefix**, and publishes retained **Home Assistant MQTT Auto-Discovery** configurations (`homeassistant/<component>/presence_xxxx/<object>/config`) plus real-time JSON state payloads (`presence_sensor/presence_xxxx/state`).
+The sensor operates on your Thread mesh at **`+8 dBm` (`6.3 mW`) IEEE 802.15.4 TX power** (`CONFIG_OPENTHREAD_DEFAULT_TX_POWER=8`), synthesizes the IPv6 address of your Home Assistant Mosquitto MQTT broker from the OpenThread Border Router's `/96` **RFC 6052 NAT64 prefix**, and publishes retained **Home Assistant MQTT Auto-Discovery** payloads plus real-time JSON state updates.
 
-### Device Identity & Topics
+### Device Identity, Topics & Auto-Discovered Entities
 
-- **Display Name**: `Presence-XXXX` (where `XXXX` is the uppercase hex of the folded 16-bit FNV-1a hash computed by `BthomeProto::DeriveShortIdFromDeviceId()` over `hwinfo_get_device_id()`).
+- **Display Name**: `Presence-XXXX` (uppercase hex of the folded 16-bit FNV-1a hash of `hwinfo_get_device_id()`).
 - **Node Slug**: `presence_xxxx` (`HaMqttProto::FormatNodeSlug()`).
 - **State Topic**: `presence_sensor/presence_xxxx/state`
   ```json
@@ -63,53 +66,51 @@ The sensor operates as an **OpenThread 1.3 Minimal Thread Device (MTD) / Sleepy 
   ```
 - **Availability Topic (LWT)**: `presence_sensor/presence_xxxx/status` (`"online"` / `"offline"`, retained).
 - **Auto-Discovered Entities (5 Entities)**:
-  - `binary_sensor.presence_xxxx_occupancy` (`device_class: occupancy`)
-  - `binary_sensor.presence_xxxx_motion` (`device_class: motion`)
+  - `binary_sensor.presence_xxxx_occupancy` (`device_class: occupancy` — Moving + Stationary/Breathing presence)
+  - `binary_sensor.presence_xxxx_motion` (`device_class: motion` — Kinematic radial movement `>= 100 mm` with `5.0 s` active hold window via `Ld2410sMotionTracker`)
   - `sensor.presence_xxxx_distance` (`device_class: distance`, `mm`)
   - `sensor.presence_xxxx_battery` (`device_class: battery`, `%`)
   - `sensor.presence_xxxx_voltage` (`device_class: voltage`, `mV`)
 
-### Dynamic SED Fast-Polling & Sub-Second Lighting Latency
+### Wireless MQTT Firmware Over-The-Air (FOTA) Updates (`scripts/push-ota.py`)
 
-- **Dynamic Poll Period (`80 ms` Active / `5000 ms` Sleep)**: During TCP handshake, MQTT `CONNECT`/`CONNACK`, and state `PUBLISH`, `ThreadMqttPublisher` switches the OpenThread child poll period to **`80 ms`** (`otLinkSetPollPeriod(instance, 80)`) for low-latency TCP delivery, and relaxes back to **`5000 ms`** (`5.0 s`) in idle sleep so the IEEE 802.15.4 radio remains off >99% of the time.
-- **Persistent TCP/NAT64 Session**: Keeps the MQTT session open across occupancy/motion transitions (`CONFIG_APP_MQTT_KEEPALIVE_SEC=300`) so subsequent `OT2` or UART state transitions publish in a single TCP segment without repeating the TCP/MQTT handshake.
-- **Continuous Interrupt-Driven UART RX (`mRxRing[256]`) & Kinematic Motion Classifier (`Ld2410sMotionTracker`)**: `uart0` RX (`P0.08`) stays continuously armed in interrupt mode so `OnUartIsr` captures 100% of asynchronous 5-byte (`6E...62`) and Standard (`F4...F5`) radar frames into `mRxRing[256]` with zero polling blind spots. `SampleTargetReport()` drains buffered frames non-blockingly (`< 1 ms`) every **`400 ms`** (`CONFIG_APP_RADAR_POLL_INTERVAL_MS`), enforces the `2100 mm` (`3 × 700 mm`) bathroom boundary, and trusts UART `Unoccupied` / out-of-bounds reports over `OT2`. `Ld2410sMotionTracker` evaluates radial distance kinematics (`>= 100 mm` movement) across all occupied frames (`0x02` and `0x03`) with a `5.0 s` active hold window so **Motion** reports `ON` on entry/walking and transitions cleanly to `OFF` after `5.0 s` of stillness while **Occupancy** remains `ON`.
-- **Battery Refresh**: SAADC `VDDH/5` is sampled at boot and every `1 hour` (`3600 s`, `CONFIG_APP_BATTERY_SAMPLE_INTERVAL_SEC`).
-
----
-
-## 3. Bathroom Radar Tuning (3 m³ Volume)
-
-At boot, the firmware configures the HLK-LD2410S over `uart0` (`115200` baud on `P0.08` RX / `P0.06` TX) for a compact **3 m³ bathroom** (~`1.5 m × 1.5 m × 2.2 m`) and switches the radar to its **Minimal 5-Byte Output Format** (`6E [state] [dist_lo] [dist_hi] 62`, where `state = 0x00/0x01` Unoccupied, `0x02` Stationary presence, `0x03` Moving presence):
-
-| Parameter (Command `0x0070`) | Kconfig / Constant | Default Value | Setting | Purpose |
-| :--- | :--- | :--- | :--- | :--- |
-| **Farthest Detection Gate** | `CONFIG_APP_RADAR_MAX_GATE` | `3` | `2.10 m` (`3 × 0.70 m`) | Rejects ghost reflections through bathroom walls or doors beyond `2.10 m` |
-| **Nearest Detection Gate** | `CONFIG_APP_RADAR_MIN_GATE` | `0` | `0.00 m` | Detects presence right up to the sensor enclosure |
-| **Unmanned Delay / Hold Time** | `CONFIG_APP_RADAR_HOLD_S` | `30` | `30 s` | Holds presence across brief motionless intervals without keeping lights on long after exit |
-| **Status Report Frequency** | `kDefaultReportFreqTenthsHz` | `80` | `8.0 Hz` (`80 × 0.1 Hz`, `125 ms`) | Sub-second bathroom lighting response and `~62 ms` average UART wake window |
-| **Distance Report Frequency** | `kDefaultReportFreqTenthsHz` | `80` | `8.0 Hz` (`80 × 0.1 Hz`, `125 ms`) | Matches `8.0 Hz` (`125 ms`) frame cadence |
-| **Response Speed** | `kDefaultResponseSpeedFast` | `10` | Fast (`10`) | Instant entry detection (`< 200 ms`) for bathroom lighting automation |
-
-Gate, hold, and poll parameters are tunable via Kconfig (`CONFIG_APP_RADAR_MAX_GATE`, `CONFIG_APP_RADAR_MIN_GATE`, `CONFIG_APP_RADAR_HOLD_S`, `CONFIG_APP_RADAR_POLL_INTERVAL_MS` in `Kconfig`).
-
----
-
-## 4. How to Build & Test
-
-The firmware is built using Nordic's **nRF Connect SDK v2.8.0** and **Zephyr RTOS**.
-
-### Host Protocol Unit Tests
-
-Pure C++20 encoders and parsers for the HLK-LD2410S binary protocol (`src/ld2410s_proto.*`), Home Assistant MQTT Auto-Discovery / NAT64 address synthesis (`src/ha_mqtt_proto.*`), and BTHome v2 payloads (`src/bthome_proto.*`) run natively on macOS/Linux without hardware:
+Always-powered USB builds (`CONFIG_APP_ALWAYS_USB_POWERED=y`, default on `ld2410c.conf` and optional on USB-powered `HLK-LD2410S` builds) run an internal dual-slot flash staging receiver (`FotaReceiver`) subscribed to `presence_sensor/presence_xxxx/ota/#` (and broadcast `presence_sensor/all/ota/#`):
 
 ```bash
-scripts/run-tests.sh
+# Push a newly built zephyr.bin over MQTT/OpenThread to a specific node or all USB-powered nodes:
+python3 scripts/push-ota.py --node presence_xxxx --firmware build_ld2410c/zephyr/zephyr.bin
 ```
 
-### Local Zephyr Build & `local.conf` Credentials (`Zero Secrets Invariant`)
+---
 
-Create a gitignored `local.conf` in the repository root with your OpenThread Active Operational Dataset TLV hex string and Home Assistant MQTT credentials (automatically loaded by `CMakeLists.txt` when present; **never commit `local.conf` to git**):
+## 4. Radar Detection Tuning (`Kconfig`)
+
+All detection parameters can be overridden in `local.conf` or `ld2410c.conf`:
+
+| Kconfig Option | `HLK-LD2410S` Default (`3 m³` Bathroom) | `HLK-LD2410C` Default (`ld2410c.conf` Office) | Description |
+| :--- | :--- | :--- | :--- |
+| `CONFIG_APP_RADAR_MAX_GATE` | `3` (`2.10 m` at `0.70 m`/gate) | `3` (`3.00 m` for 0-indexed Gates `0..3` at `0.75 m`/gate) | Hardware farthest detection gate programmed into the radar at boot |
+| `CONFIG_APP_RADAR_MIN_GATE` | `0` (`0.00 m`) | `0` (`0.00 m`) | Hardware nearest detection gate |
+| `CONFIG_APP_RADAR_MAX_DISTANCE_MM` | `2100` (`2.10 m`) | `2950` (`2.95 m`) | Software distance boundary clamp (ignores far-wall/door bounce beyond room boundary) |
+| `CONFIG_APP_RADAR_HOLD_S` | `30` (`30 s`) | `180` (`3 min`) | Unoccupied delay / presence hold time after last detected motion or breathing |
+| `CONFIG_APP_RADAR_POLL_INTERVAL_MS` | `400` (`2.5 Hz` drain of `8.0 Hz` radar stream) | `100` (`10 Hz` real-time drain) | Interval between non-blocking drains of the interrupt-driven `mRxRing[256]` UART buffer |
+| `CONFIG_APP_ALWAYS_USB_POWERED` | `n` (set `y` for USB-powered `LD2410S`) | `y` | Enables always-on OpenThread MED (`RxOnWhenIdle=true`), continuous `10 Hz` UART polling, and wireless MQTT FOTA |
+
+---
+
+## 5. How to Build, Test & Flash
+
+Built with Nordic **nRF Connect SDK v2.8.0** and **Zephyr RTOS**.
+
+### 1. Run Host Unit Tests (`248` Protocol & Codec Assertions)
+
+```bash
+./scripts/run-tests.sh
+```
+
+### 2. Configure `local.conf` (`Zero Secrets Invariant`)
+
+Create a gitignored `local.conf` in the repository root with your OpenThread Active Operational Dataset TLV hex string and Home Assistant MQTT broker credentials (**never commit `local.conf` to git**):
 
 ```ini
 CONFIG_APP_THREAD_DATASET_TLV_HEX="<your-openthread-active-dataset-tlv-hex>"
@@ -119,29 +120,25 @@ CONFIG_APP_MQTT_USERNAME="<your-mqtt-username>"
 CONFIG_APP_MQTT_PASSWORD="<your-mqtt-password>"
 ```
 
-Expects the SDK in `~/ncs` next to this repo in `~/git/presence-sensor-nrf`:
+### 3. Local Zephyr Builds (`HLK-LD2410S` & `HLK-LD2410C`)
 
 ```bash
 source env.sh
 
-# Release build for HLK-LD2410S (default, 20x20 mm battery-powered radar)
+# A. HLK-LD2410S Release Build (Default — 18650 Battery SED; add CONFIG_APP_ALWAYS_USB_POWERED=y in local.conf for USB MED)
 west build --no-sysbuild -b nice_nano/nrf52840 -p always -o=-k0 \
   -s ~/git/presence-sensor-nrf \
   -d ~/git/presence-sensor-nrf/build -- \
   -DBOARD_ROOT=$HOME/git/presence-sensor-nrf
 
-# Release build for HLK-LD2410C (22x16 mm constant USB-C powered radar)
+# B. HLK-LD2410C Release Build (Constant USB-C Power, OpenThread MED, 10 Hz Poll, Wireless FOTA)
 west build --no-sysbuild -b nice_nano/nrf52840 -p always -o=-k0 \
   -s ~/git/presence-sensor-nrf \
   -d ~/git/presence-sensor-nrf/build_ld2410c -- \
   -DBOARD_ROOT=$HOME/git/presence-sensor-nrf \
   -DEXTRA_CONF_FILE="local.conf;ld2410c.conf"
-```
 
-For benchtop bring-up with live logs over USB CDC ACM (`screen /dev/cu.usbmodem* 115200`), build with `debug.conf` and `debug.overlay` (add `ld2410c.conf` for HLK-LD2410C):
-
-```bash
-source env.sh
+# C. USB CDC ACM Debug Build (live logs on /dev/cu.usbmodem* at 115200; append ;ld2410c.conf for LD2410C)
 west build --no-sysbuild -b nice_nano/nrf52840 -p always -o=-k0 \
   -s ~/git/presence-sensor-nrf \
   -d ~/git/presence-sensor-nrf/build_debug -- \
@@ -150,68 +147,53 @@ west build --no-sysbuild -b nice_nano/nrf52840 -p always -o=-k0 \
   -DEXTRA_DTC_OVERLAY_FILE=debug.overlay
 ```
 
-### GitHub Actions Build
-
-Every push runs `.github/workflows/build.yml` (host unit tests + HLK-LD2410S & HLK-LD2410C Release/Debug UF2 builds in `ghcr.io/nrfconnect/sdk-nrf-toolchain:v2.8.0`). Download the latest CI artifacts into `build/zephyr/` with:
+Or fetch prebuilt CI artifacts from GitHub Actions:
 
 ```bash
-scripts/fetch-firmware.sh                     # HLK-LD2410S release build
-scripts/fetch-firmware.sh --debug             # HLK-LD2410S USB CDC ACM debug build
-scripts/fetch-firmware.sh --ld2410c           # HLK-LD2410C release build
-scripts/fetch-firmware.sh --ld2410c --debug   # HLK-LD2410C USB CDC ACM debug build
+./scripts/fetch-firmware.sh                     # HLK-LD2410S release UF2
+./scripts/fetch-firmware.sh --debug             # HLK-LD2410S debug UF2
+./scripts/fetch-firmware.sh --ld2410c           # HLK-LD2410C release UF2
+./scripts/fetch-firmware.sh --ld2410c --debug   # HLK-LD2410C debug UF2
 ```
 
----
+### 4. Flashing via UF2 Bootloader (`0x1000` Flash Offset)
 
-## 5. Flashing to SuperMini nRF52840
-
-1. Connect the SuperMini nRF52840 to your Mac via USB-C.
-2. **Double-click the RST button** within 0.5 s to enter the UF2 bootloader (`NICENANO` volume mounts).
-3. **New board check**: Inspect `/Volumes/NICENANO/INFO_UF2.TXT`. If it reports `UF2 Bootloader 0.6.0`, first copy `update-nice_nano_bootloader-0.6.1_nosd.uf2` to `/Volumes/NICENANO/`, wait for reboot, and double-click `RST` again.
-4. Flash the firmware from Terminal:
+1. Connect the SuperMini nRF52840 via USB-C and **double-click `RST`** within `0.5 s` to mount `/Volumes/NICENANO`.
+2. **Bootloader version check (new boards)**: Check `/Volumes/NICENANO/INFO_UF2.TXT`. If it reports `UF2 Bootloader 0.6.0`, copy `update-nice_nano_bootloader-0.6.1_nosd.uf2` to `/Volumes/NICENANO/` first, let it reboot, and double-click `RST` again.
+3. Copy the UF2 image:
    ```bash
    cp -X build/zephyr/zephyr.uf2 /Volumes/NICENANO/
    ```
-   *(A macOS Finder/cp I/O warning at the very end of the copy is normal because the board reboots immediately after the final UF2 block is written.)*
 
 ---
 
-## 6. Home Assistant Integration (OpenThread + MQTT Auto-Discovery)
-
-1. Ensure your **OpenThread Border Router (OTBR)** has NAT64 enabled and your Home Assistant **MQTT (Mosquitto)** integration is running.
-2. Power on the sensor. Within seconds of attaching to the Thread network, the sensor connects to the MQTT broker via NAT64 and publishes retained Home Assistant MQTT Auto-Discovery configs for **`Presence-XXXX`** under **Settings → Devices & Services → MQTT**.
-3. The device automatically registers five entities:
-   - **Occupancy** (`binary_sensor.presence_xxxx_occupancy`, `device_class: occupancy`, states `Clear` / `Detected`) — true for both moving and stationary/breathing presence.
-   - **Motion** (`binary_sensor.presence_xxxx_motion`, `device_class: motion`, states `Clear` / `Detected`) — true during active movement and for `5.0 s` after stillness.
-   - **Distance** (`sensor.presence_xxxx_distance`, `device_class: distance`) — target distance in `mm`.
-   - **Battery** (`sensor.presence_xxxx_battery`, `device_class: battery`) — `0–100 %`.
-   - **Voltage** (`sensor.presence_xxxx_voltage`, `device_class: voltage`) — cell voltage in `mV`.
-
----
-
-## 7. Power Budget & Battery Life
+## 6. Battery Power Budget (`HLK-LD2410S` + `18650` Cell, Models 1–3)
 
 | Contributor | Approx. Average Current |
 | :--- | :--- |
-| **HLK-LD2410S** (Low-power mode via `P0.13` 3.3 V rail; `8.0 Hz` fast response) | `58 – 120 µA` |
-| **nRF52840 System ON Idle** (RTC + RAM retention + GPIOTE `PORT` event on `P0.17`) | `~3 µA` |
-| **OpenThread 1.3 SED Radio** (`+8 dBm` TX, `5.0 s` idle MAC data poll + `80 ms` fast-poll on state transitions) | `~8 – 18 µA` |
-| **Brief `uart0` Wake Windows** (`OT2`-gated in 5-wire mode; `~62 ms` every `400 ms` while occupied/4-wire) | `~3 – 75 µA` |
-| **6-Hour SAADC `VDDH/5` Battery Sample** (one-shot, 16× oversampling) | `< 0.1 µA` |
+| **HLK-LD2410S** (Low-power mode via `P0.13` `3.3 V` rail; `8.0 Hz` fast response) | `58 – 120 µA` |
+| **nRF52840 System ON Idle** (RTC + RAM retention + GPIOTE `PORT` wake on `P0.17`) | `~3 µA` |
+| **OpenThread 1.3 SED Radio** (`+8 dBm` TX, `5.0 s` sleep poll / `80 ms` active fast-poll) | `~8 – 18 µA` |
+| **Brief `uart0` Wake Windows** (`OT2`-gated in 5-wire mode; `~62 ms` every `400 ms` while occupied) | `~3 – 75 µA` |
+| **1-Hour SAADC `VDDH/5` Battery Sample** (one-shot, 16× oversampling) | `< 0.1 µA` |
 | **SuperMini Quiescent / Diode Leakage** (batch-dependent) | `4 – 60 µA` |
-| **Total Estimated System Average** | **`~75 – 265 µA`** |
-
-With a **2800 mAh Li-ion cell** (~`2200 mAh` usable above `3.0 V`), a `75 – 265 µA` average current yields **1.0 to 3.3 years** of continuous runtime per charge (longest in 5-wire `OT2` mode where `uart0` stays completely suspended while the bathroom is unoccupied).
+| **Total Estimated System Average** | **`~75 – 265 µA` (~1.0 to 3.3 years on a 2800 mAh 18650 cell)** |
 
 ---
 
-## 8. 3D-Printable Enclosures (4 Bambu A1 Models)
+## 7. 3D-Printable Enclosures (9 Bambu Lab A1 Models + USB-C Fit-Test Gauge)
 
-[`enclosure/enclosure.py`](enclosure/enclosure.py) and [`enclosure/enclosure_variants.py`](enclosure/enclosure_variants.py) generate **four complete, support-free Bambu A1 enclosure models** tailored to the **`20.0 × 20.0 × 1.2 mm` HLK-LD2410S** or **`22.0 × 16.0 × 1.2 mm` HLK-LD2410C**, **SuperMini nRF52840**, and **18650 Li-ion cell** (see [`enclosure/README.md`](enclosure/README.md) for assembly and print settings):
+[`enclosure/enclosure.py`](enclosure/enclosure.py) and [`enclosure/enclosure_variants.py`](enclosure/enclosure_variants.py) build **9 support-free Bambu Lab A1 enclosure variants** plus a **4-station USB-C clip-retention fit-test gauge**, verified by [`enclosure/verify.py`](enclosure/verify.py) (`0.000 mm³` boolean overlap across all solid pairs, `1.20 mm` blind RF radome with `5.10 mm` antenna air gap) and [`enclosure/sections.py`](enclosure/sections.py) (`34` 2D cross-section PNGs in [`enclosure/out/sections/`](enclosure/out/sections/)). See [`enclosure/README.md`](enclosure/README.md) for full print and assembly details:
 
-| Model | Variant Name | Printable `.stl` Files (`enclosure/out/`) | CAD `.step` Files (`enclosure/out/`) | Closure & Mounting | Key Features & Best Use Case |
+| Model | Variant & Radar | Outer Dimensions | Power & USB-C Port Style | Printable `.stl` Files (`enclosure/out/`) | Best Use Case |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Model 1** | **Sealed Gasketed Wall-Mount (HLK-LD2410S)** | `base.stl`, `lid.stl` | `base.step`, `lid.step`, `assembly.step` | 4× M3×8 screws + M3×5.7×4.6 heat-set inserts, 2 mm EPDM/TPU gasket groove, `±X` wall-mount tabs | Steam/splash-resistant bathroom wall mounting (`22 × 22 × 1.2 mm` blind RF radome window) |
-| **Model 2** | **Snap-Fit + 45° Room-Corner Bracket (HLK-LD2410S)** | `corner_base.stl`, `corner_lid.stl`, `corner_bracket.stl` | `corner_base.step`, `corner_lid.step`, `corner_bracket.step`, `corner_assembly.step` | Tool-less snap-fit lid (`±Y` barbs) + slide-on 45° downward-tilt 90° room-corner / ceiling bracket | Optimal 3 m³ bathroom corner coverage with zero metal fasteners or heat-set inserts |
-| **Model 3** | **Freestanding Shelf / Vanity Pod (HLK-LD2410S)** | `vanity_base.stl`, `vanity_lid.stl` | `vanity_base.step`, `vanity_lid.step`, `vanity_assembly.step` | Tool-less snap-fit lid (`±Y` barbs) + flat weighted `-Y` 18650 base foot | Stands upright on a bathroom shelf or vanity with a `+X` **USB-C pass-through port** for in-place 18650 recharging |
-| **Model 4** | **HLK-LD2410C Constant USB-C Power Case (`22 × 16 mm`)** | `ld2410c_base.stl`, `ld2410c_lid.stl` | `ld2410c_base.step`, `ld2410c_lid.step`, `ld2410c_assembly.step`, `ld2410c_fit_check.step` | Tool-less snap-fit lid (`±Y` barbs) + flat `-Y` shelf foot + `±X` wall-mount screw tabs | Dedicated `22.0 × 16.0 mm` HLK-LD2410C cradle + `24 × 18 × 1.2 mm` blind RF radome + **`+X` constant USB-C power pass-through port** (shelf or wall mount) |
+| **Model 1** | **Sealed Gasketed Wall-Mount** (`HLK-LD2410S`, `20 × 20 mm`) | `118.8 × 76.1 × 29.4 mm` | `18650` cell (`10 × 10 mm` nickel contact plates) | [`base.stl`](enclosure/out/base.stl), [`lid.stl`](enclosure/out/lid.stl) | Steam-proof bathroom/outdoor wall mounting (4× `M3` heat-set inserts, `2 mm` EPDM/TPU O-ring gasket groove, `±X` wall tabs) |
+| **Model 2** | **45° Room-Corner / Ceiling Snap-Fit** (`HLK-LD2410S`, `20 × 20 mm`) | `86.8 × 56.4 × 29.4 mm` | `18650` cell (`10 × 10 mm` nickel contact plates) | [`corner_base.stl`](enclosure/out/corner_base.stl), [`corner_lid.stl`](enclosure/out/corner_lid.stl), [`corner_bracket.stl`](enclosure/out/corner_bracket.stl) | Tool-less snap-fit case that slides into a 90° room-corner / ceiling bracket aiming the radar at a **45° downward pitch** |
+| **Model 3** | **Freestanding Vanity / Shelf Pod** (`HLK-LD2410S`, `20 × 20 mm`) | `86.8 × 54.4 × 29.4 mm` | `18650` cell + `+X` SuperMini USB-C recharge pass-through | [`vanity_base.stl`](enclosure/out/vanity_base.stl), [`vanity_lid.stl`](enclosure/out/vanity_lid.stl) | Stands upright on a flat `-Y` pedestal foot (low-CG 18650 at bottom) with in-place USB-C recharging |
+| **Model 4** | **Sleek Desktop Pod (`LD2410C`)** (`HLK-LD2410C`, `22 × 16 mm`) | `86.8 × 28.8 × 27.4 mm` | `+X` side 2-pin panel USB-C socket (`13.2 / 13.4 mm` 3-zone clip bay, no battery) | [`ld2410c_base.stl`](enclosure/out/ld2410c_base.stl), [`ld2410c_lid.stl`](enclosure/out/ld2410c_lid.stl), [`v_stand.stl`](enclosure/out/v_stand.stl) | Slim tabless beveled desktop pod (**45% narrower** than 18650 models) with detachable **Inverted-V (`ʌ`) stand** |
+| **Model 5** | **Sleek Desktop Pod (`LD2410S`)** (`HLK-LD2410S`, `20 × 20 mm`) | `86.8 × 32.8 × 29.4 mm` | `+X` side 2-pin panel USB-C socket (`13.2 / 13.4 mm` 3-zone clip bay, no battery) | [`ld2410s_usb_base.stl`](enclosure/out/ld2410s_usb_base.stl), [`ld2410s_usb_lid.stl`](enclosure/out/ld2410s_usb_lid.stl), [`v_stand.stl`](enclosure/out/v_stand.stl) | Same sleek desktop pod architecture as Model 4, sized for `20 × 20 mm` `HLK-LD2410S` + 5-pin female DuPont connector |
+| **Model 6** | **`Aura-S v1` (`aura_v1`) — Horizon Stadium Monolith** (`HLK-LD2410S`, `20 × 20 mm` + DuPont) | `92.0 × 34.0 × 29.4 mm` (`R = 17.0 mm` stadium) | **Hidden rear (`Z = 0`)** 2-pin panel USB-C socket (`13.2 / 13.4 mm` 3-zone clip bay) | [`aura_v1_base.stl`](enclosure/out/aura_v1_base.stl), [`aura_v1_lid.stl`](enclosure/out/aura_v1_lid.stl), [`aura_v1_stand.stl`](enclosure/out/aura_v1_stand.stl) *(also `aura_s_v1_*`)* | Award-edition architectural stadium capsule with front horizon shadow groove, hidden rear power cord, and beveled **Inverted-V (`ʌ`) floating pedestal** |
+| **Model 7** | **`Aura-C v1` (`aura_c_v1`) — Horizon Stadium Monolith** (`HLK-LD2410C`, `22 × 16 mm` + DuPont) | `92.0 × 32.0 × 27.4 mm` (`R = 16.0 mm` stadium) | **Hidden rear (`Z = 0`)** 2-pin panel USB-C socket (`13.2 / 13.4 mm` 3-zone clip bay) | [`aura_c_v1_base.stl`](enclosure/out/aura_c_v1_base.stl), [`aura_c_v1_lid.stl`](enclosure/out/aura_c_v1_lid.stl), [`aura_c_v1_stand.stl`](enclosure/out/aura_c_v1_stand.stl) | Slimmer `32.0 mm` award-edition stadium capsule for the `22 × 16 mm` `HLK-LD2410C` with hidden rear USB-C and beveled **Inverted-V (`ʌ`) pedestal** |
+| **Model 8** | **`Aura-S v2` (`aura_v2`) — Compact Stacked Direct-Solder Monolith** (`HLK-LD2410S`, `20 × 20 mm`) | **`64.0 × 34.0 × 23.4 mm`** (`45%` smaller volume than `v1`) | **Sculpted flush-alcove `+X` side** 2-pin panel USB-C socket (`X = +28.50 mm` recessed seat + `45°` halo) | [`aura_v2_base.stl`](enclosure/out/aura_v2_base.stl), [`aura_v2_lid.stl`](enclosure/out/aura_v2_lid.stl), [`aura_v2_stand.stl`](enclosure/out/aura_v2_stand.stl) *(also `aura_s_v2_*`)* | Stacks direct-soldered `HLK-LD2410S` (`Z = 15.9 mm`) vertically over SuperMini (`Z = 5.4 mm`); smooth unbroken `Z = 0` back face + flush side USB-C + compact **Inverted-V (`ʌ`) pedestal** |
+| **Model 9** | **`Aura-C v2` (`aura_c_v2`) — Compact Stacked Direct-Solder Monolith** (`HLK-LD2410C`, `22 × 16 mm`) | **`64.0 × 32.0 × 23.4 mm`** (`2:1` stadium proportion) | **Sculpted flush-alcove `+X` side** 2-pin panel USB-C socket (`X = +28.50 mm` recessed seat + `45°` halo) | [`aura_c_v2_base.stl`](enclosure/out/aura_c_v2_base.stl), [`aura_c_v2_lid.stl`](enclosure/out/aura_c_v2_lid.stl), [`aura_c_v2_stand.stl`](enclosure/out/aura_c_v2_stand.stl) | Stacks direct-soldered `HLK-LD2410C` (`Z = 15.9 mm`) vertically over SuperMini (`Z = 5.4 mm`); smooth unbroken `Z = 0` back face + flush side USB-C + compact **Inverted-V (`ʌ`) pedestal** |
+| **Fit-Test** | **USB-C Socket 4-Way Clip-Retention Gauge** | `46.9 × 100.8 × 18.0 mm` | Tests `12.6, 12.8, 13.0, 13.2 mm` clip collars + `13.4 × 5.8 mm` stem sleeve | [`usbc_socket_fit_test.stl`](enclosure/out/usbc_socket_fit_test.stl) | Dual-orientation (`Z = 0` rear & `+X` side) test gauge for AliExpress `1005008559159734` panel USB-C socket (Station #4 `13.2 mm` collar = calibrated winner) |
